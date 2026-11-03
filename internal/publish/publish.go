@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -132,6 +133,10 @@ func Begin(root string, now time.Time) (*Release, error) {
 	return &Release{
 		root: root, ID: id, Dir: dir, prev: Current(root),
 		objects: map[string]bool{}, cache: loadCache(root),
+		// Windows can't atomically rename a symlink over the existing
+		// current symlink ("Access is denied"), even where it can create
+		// symlinks, so it always publishes with current.id.
+		noSymlinks: runtime.GOOS == "windows",
 	}, nil
 }
 
@@ -142,7 +147,9 @@ func (r *Release) Previous(rel string) (string, bool) {
 		return "", false
 	}
 	clean := filepath.Clean(filepath.FromSlash(rel))
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	// IsLocal also rejects rooted paths ("\\etc") and reserved names
+	// ("NUL") on Windows, which IsAbs alone lets through.
+	if !filepath.IsLocal(clean) {
 		return "", false
 	}
 	return filepath.Join(r.root, releasesDir, r.prev, clean), true
@@ -182,7 +189,9 @@ func (r *Release) LinkPrevious(rel string) (bool, error) {
 // paths that escape it.
 func (r *Release) Path(rel string) (string, error) {
 	clean := filepath.Clean(filepath.FromSlash(rel))
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	// IsLocal also rejects rooted paths ("\\etc") and reserved names
+	// ("NUL") on Windows, which IsAbs alone lets through.
+	if !filepath.IsLocal(clean) {
 		return "", fmt.Errorf("path %q escapes release", rel)
 	}
 	return filepath.Join(r.Dir, clean), nil
