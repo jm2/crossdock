@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 John-Michael and crossdock contributors
+
 // Package config loads and validates crossdock configuration.
 //
 // M1 uses JSON (standard library only); YAML is planned once the module

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 John-Michael and crossdock contributors
+
 // Package sign produces the OpenPGP signatures each repo format needs.
 //
 // M1 drives the gpg binary, which also means hardware keys and gpg-agent

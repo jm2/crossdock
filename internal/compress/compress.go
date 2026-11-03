@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 John-Michael and crossdock contributors
+
 // Package compress opens compressed streams by sniffing magic bytes.
 //
 // gzip and bzip2 are decoded natively. xz and zstd currently shell out to

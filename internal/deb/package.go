@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 John-Michael and crossdock contributors
+
 // Package deb reads .deb packages and writes apt repository indexes.
 package deb
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 John-Michael and crossdock contributors
+
 // Command crossdock publishes package artifacts as signed apt, pacman, RPM
 // and GooGet repositories.
 package main

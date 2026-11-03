@@ -60,3 +60,13 @@ Both requirements go away in M2.
 ```sh
 go test ./...   # the apt end-to-end test runs when gpg, dpkg-deb and apt-get exist
 ```
+
+## License
+
+crossdock is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See [LICENSE](LICENSE).
+
+SPDX-License-Identifier: GPL-3.0-or-later
+

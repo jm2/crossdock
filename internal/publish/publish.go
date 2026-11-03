@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 John-Michael and crossdock contributors
+
 // Package publish manages crossdock's on-disk output: a content-addressed
 // store of package payloads, immutable release directories, and the atomic
 // "current" symlink swap.
