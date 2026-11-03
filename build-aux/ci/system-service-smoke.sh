@@ -82,6 +82,12 @@ wait_for 90 "a published Packages file listing 1.0" \
   grep -q '^Version: 1.0$' /var/lib/crossdock/repo/current/deb/local/dists/stable/main/binary-amd64/Packages
 [[ $(stat -c %U /var/lib/crossdock/repo/current/deb/local/dists/stable/InRelease) == crossdock ]] || fail "release not written by crossdock"
 
+echo "== every format is published and served"
+for f in deb/local/dists/stable/InRelease arch/local/x86_64/local.db arch/local/x86_64/local.db.sig \
+  rpm/local/repodata/repomd.xml rpm/local/repodata/repomd.xml.asc goo/local/index.gz goo/local/index; do
+  curl -fsS --noproxy '*' -o /dev/null "http://127.0.0.1:8080/$f" || fail "not served: /$f"
+done
+
 echo "== install with apt over HTTP"
 install -d /etc/apt/keyrings
 curl -fsS --noproxy '*' -o /etc/apt/keyrings/crossdock.asc http://127.0.0.1:8080/crossdock.asc

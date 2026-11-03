@@ -25,7 +25,9 @@ import (
 	"github.com/jm2/crossdock/internal/archpkg"
 	"github.com/jm2/crossdock/internal/config"
 	"github.com/jm2/crossdock/internal/deb"
+	"github.com/jm2/crossdock/internal/goo"
 	"github.com/jm2/crossdock/internal/publish"
+	"github.com/jm2/crossdock/internal/rpm"
 	"github.com/jm2/crossdock/internal/serve"
 	"github.com/jm2/crossdock/internal/sign"
 )
@@ -151,8 +153,12 @@ func build(cfg *config.Config, env *publish.Env) error {
 			err = deb.Publish(r, env)
 		case config.FormatArch:
 			err = archpkg.Publish(r, env)
+		case config.FormatRPM:
+			err = rpm.Publish(r, env)
+		case config.FormatGoo:
+			err = goo.Publish(r, env)
 		default:
-			err = fmt.Errorf("format %q is not implemented yet (see PLAN.md)", r.Format)
+			err = fmt.Errorf("unknown format %q", r.Format)
 		}
 		if err != nil {
 			return fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
@@ -175,7 +181,7 @@ func publishTime() (time.Time, error) {
 
 func cmdInspect(args []string) error {
 	fs := flag.NewFlagSet("inspect", flag.ExitOnError)
-	files := fs.Bool("files", false, "include the file list (pacman packages)")
+	files := fs.Bool("files", false, "include the file list (pacman and RPM packages)")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
 		return errors.New("inspect: no package files given")
@@ -207,6 +213,26 @@ func cmdInspect(args []string) error {
 				m["files"] = pkg.Files
 			}
 			out = m
+		case strings.HasSuffix(p, ".rpm"):
+			pkg, err := rpm.ReadPackage(p)
+			if err != nil {
+				return err
+			}
+			m := map[string]any{"format": "rpm", "path": p, "name": pkg.Name, "nevra": pkg.NEVRA(),
+				"epoch": pkg.Epoch, "version": pkg.Version, "release": pkg.Release, "arch": pkg.Arch,
+				"summary": pkg.Summary, "license": pkg.License, "url": pkg.URL, "sourcerpm": pkg.SourceRPM,
+				"provides": pkg.Provides, "requires": pkg.Requires}
+			if *files {
+				m["files"] = pkg.Files
+			}
+			out = m
+		case strings.HasSuffix(p, ".goo"):
+			pkg, err := goo.ReadPackage(p)
+			if err != nil {
+				return err
+			}
+			out = map[string]any{"format": "goo", "path": p, "name": pkg.Name, "version": pkg.Version,
+				"arch": pkg.Arch, "pkgspec": pkg.Spec}
 		default:
 			return fmt.Errorf("%s: unrecognized package type", p)
 		}

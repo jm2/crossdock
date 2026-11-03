@@ -14,14 +14,30 @@
       "source": "/var/lib/crossdock/incoming/deb",
       "suite": "stable",
       "component": "main",
-      "architectures": ["amd64", "arm64"]
+      "architectures": [
+        "amd64",
+        "arm64"
+      ]
     },
     {
       "name": "local",
       "format": "arch",
       "source": "/var/lib/crossdock/incoming/arch",
-      "architectures": ["x86_64", "aarch64"],
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
       "sign_packages": true
+    },
+    {
+      "name": "local",
+      "format": "rpm",
+      "source": "/var/lib/crossdock/incoming/rpm"
+    },
+    {
+      "name": "local",
+      "format": "goo",
+      "source": "/var/lib/crossdock/incoming/goo"
     }
   ]
 }

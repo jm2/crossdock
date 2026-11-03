@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **RPM repositories** — `format: rpm` publishes `rpm/<repo>/` with `Packages/` and `repodata/`
+  (`primary`, `filelists`, `other`, and a signed `repomd.xml`), following createrepo_c's rules,
+  for dnf with `repo_gpgcheck=1`. Package headers aren't re-signed; sign packages with `rpmsign`
+  for `gpgcheck=1`.
+- **GooGet repositories** — `format: goo` publishes `goo/<repo>/index` and `index.gz` for
+  `googet addrepo`, keeping each package's pkgspec verbatim.
+- `crossdock inspect` reads `.rpm` and `.goo` files.
+- The packaged config, `/var/lib/crossdock/incoming` and `crossdock-publish.path` now cover all
+  four formats.
+- `serve` and `nginx-config` cache content-addressed `repodata/<sha256>-*.xml.gz` files as
+  immutable and serve `.goo` as `application/gzip`.
+
 ## [0.1.0] — 2026-11-03
 
 ### Added

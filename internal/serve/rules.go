@@ -38,9 +38,10 @@ const (
 // Rules is the shared serving policy.
 var Rules = []*Rule{
 	{
-		// Content-addressed paths never change.
+		// Content-addressed paths never change: apt's by-hash, and rpm-md
+		// metadata files named <sha256>-<kind>.xml.gz.
 		Name:         "by-hash",
-		Pattern:      `/by-hash/`,
+		Pattern:      `(/by-hash/|/repodata/[0-9a-f]{64}-[a-z_]+\.xml\.(gz|xz|zst)$)`,
 		CacheControl: cacheImmutable,
 	},
 	{
@@ -48,7 +49,7 @@ var Rules = []*Rule{
 		// (cheap, thanks to Last-Modified / ETag) so they never pair a new
 		// signature with a stale index or vice versa.
 		Name: "metadata",
-		Pattern: `(/(InRelease|Release|Release\.gpg|Packages|Packages\.(gz|xz|bz2|zst)|Sources|Sources\.(gz|xz)|repomd\.xml|repomd\.xml\.asc|index)` +
+		Pattern: `(/(InRelease|Release|Release\.gpg|Packages|Packages\.(gz|xz|bz2|zst)|Sources|Sources\.(gz|xz)|repomd\.xml|repomd\.xml\.asc|index|index\.gz)` +
 			`|\.(db|files)|\.(db|files)\.tar\.(gz|xz|zst|bz2)|\.(db|files)\.sig|\.(db|files)\.tar\.(gz|xz|zst|bz2)\.sig` +
 			`|^/crossdock\.(asc|gpg))$`,
 		CacheControl: cacheRevalidate,
@@ -73,7 +74,7 @@ var Rules = []*Rule{
 var Types = map[string]string{
 	"deb":   "application/vnd.debian.binary-package",
 	"rpm":   "application/x-rpm",
-	"goo":   "application/zip",
+	"goo":   "application/gzip", // a gzip-compressed tarball
 	"zst":   "application/zstd",
 	"xz":    "application/x-xz",
 	"gz":    "application/gzip",

@@ -98,8 +98,8 @@ internal/publish       release dir, content store, symlink swap, pruning
 internal/sign          OpenPGP: detached (binary/armored), clearsign, pubkey export
 internal/deb           .deb parsing (ar + control.tar.{gz,xz,zst}), apt index writer
 internal/archpkg       .pkg.tar.{zst,xz,gz} parsing (.PKGINFO, file list), pacman db writer
-internal/rpm           (M3) header parsing, repodata XML, header signing
-internal/goo           (M4) .goo parsing, GooGet index
+internal/rpm           RPM header parsing, rpm-md repodata (createrepo_c-compatible)
+internal/goo           .goo parsing, GooGet index
 internal/compress      shared decompressor selection by magic bytes
 internal/serve         HTTP handler, shared cache/type rules, nginx config generator
 ```
@@ -145,12 +145,24 @@ func Publish(repo config.Repo, env *publish.Env) error
    option; validating pacman db output against real `pacman`; a systemd
    path unit and an nginx example; release tooling (GoReleaser, with
    crossdock packaging itself).
-3. **M3: RPM.** Parse headers (`sassoftware/go-rpmutils`), write
-   `primary/filelists/other.xml.gz` and `repomd.xml` (+ `.asc`), and sign
-   package headers so `gpgcheck=1` works. Test against real `dnf` in CI.
-4. **M4: GooGet.** Parse `.goo` (zip + goospec), write the JSON `index`, and
-   optionally verify Authenticode on payloads. Test with a `googet`
-   client on Windows CI.
+3. **M3: RPM** (done, except header signing). A stdlib RPM header parser
+   and `primary`/`filelists`/`other.xml.gz` plus a signed `repomd.xml`,
+   following createrepo_c's rules: primary files, `rpmlib()` and
+   self-provided requires dropped, `pre`, libc.so.6 version pruning,
+   Latin-1 fallback, changelog limit and timestamp bumping. Tests compare
+   every field with createrepo_c on its own test RPMs (Latin-1/2,
+   source, weak deps, EdDSA/RSA/v6-signed). CI runs real dnf5 with
+   `repo_gpgcheck=1`. Remaining: sign package headers (an RSA/EdDSA
+   header signature in the signature header) so `gpgcheck=1` works
+   without `rpmsign`. This needs real rpm in the loop to verify.
+4. **M4: GooGet** (done, except a live client test). Reads the
+   `<name>.pkgspec` from `.goo` (gzip tarball) with googet's validation
+   (arch list, `fixVer` + semver + `@N`). The pkgspec is preserved
+   verbatim. `index` and `index.gz` contain `{Checksum, Source,
+   PackageSpec}`, with `Source` relative to the repo URL's parent, as
+   `download.FromRepo` resolves it. Tests decode the index with googet's
+   own struct definitions. Remaining: a Windows CI job running the real
+   googet client; optional Authenticode checks on payloads.
 5. **M5: packaging glue (optional).** Build packages from one nFPM spec
    (deb/rpm/arch), plus a `.goo` writer, so `-bin` style packages come from one
    definition.

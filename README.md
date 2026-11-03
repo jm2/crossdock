@@ -4,7 +4,10 @@ Publish one pile of package artifacts as signed, static **apt**, **pacman**,
 **RPM** and **GooGet** repositories, from a single Go binary with no distro
 tooling and no containers.
 
-> Status: M1. apt and pacman work; RPM and GooGet are planned. See
+> Status: alpha. All four formats publish. apt is tested end to end with
+> real apt-get. RPM repodata is checked field for field against
+> createrepo_c, and CI runs real dnf and pacman against it. RPM package
+> header signing and a live GooGet client test are still to come. See
 > [PLAN.md](PLAN.md).
 
 ## Install
@@ -23,9 +26,9 @@ The packages install:
 | | |
 |---|---|
 | `/usr/bin/crossdock` | the binary |
-| `/etc/crossdock/crossdock.json` | config: `deb` and `arch` repos named `local`, served on `:8080` (kept on upgrade) |
+| `/etc/crossdock/crossdock.json` | config: `deb`, `arch`, `rpm` and `goo` repos named `local`, served on `:8080` (kept on upgrade) |
 | `crossdock-serve.service` | the read-only server, as a throwaway `DynamicUser`, **LAN-only** |
-| `crossdock-publish.service` / `.path` | republish when files land in `/var/lib/crossdock/incoming/{deb,arch}` |
+| `crossdock-publish.service` / `.path` | republish when files land in `/var/lib/crossdock/incoming/{deb,arch,rpm,goo}` |
 | `crossdock` account (sysusers.d) | owns `/var/lib/crossdock/repo`; members of its group can upload |
 | `/var/lib/crossdock` (tmpfiles.d) | `repo/` (published, world-readable) and `incoming/` (setgid, group-writable) |
 | firewalld `crossdock` service | opens 8080/tcp |
@@ -50,10 +53,13 @@ sudo firewall-cmd --permanent --add-service=crossdock && sudo firewall-cmd --rel
 sudo usermod -aG crossdock "$USER"     # log in again afterwards
 rsync -av *.deb nas:/var/lib/crossdock/incoming/deb/
 rsync -av *.pkg.tar.zst nas:/var/lib/crossdock/incoming/arch/
+rsync -av *.rpm nas:/var/lib/crossdock/incoming/rpm/
+rsync -av *.goo nas:/var/lib/crossdock/incoming/goo/
 ```
 
-Clients then use `http://nas:8080/deb/local` and
-`http://nas:8080/arch/$repo/$arch` (see [Clients](#clients)).
+Clients then use `http://nas:8080/deb/local`,
+`http://nas:8080/arch/$repo/$arch`, `http://nas:8080/rpm/local` and
+`http://nas:8080/goo/local` (see [Clients](#clients)).
 
 **LAN only by default.** `crossdock-serve` listens on every interface on
 port 8080, but systemd's IP filtering only accepts loopback, link-local,
@@ -143,8 +149,42 @@ pacman (`/etc/pacman.conf`):
 Server = https://repo.example/arch/$repo/$arch
 ```
 
-Both clients get the public key from `https://repo.example/crossdock.asc`.
+dnf (`/etc/yum.repos.d/jm2.repo`). One RPM repo holds every architecture,
+and dnf picks what it can install:
+
+```ini
+[jm2]
+name=jm2
+baseurl=https://repo.example/rpm/jm2
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://repo.example/crossdock.asc
+```
+
+`repo_gpgcheck=1` verifies the signed `repomd.xml`, which pins every
+package's SHA-256. crossdock doesn't sign RPM headers itself yet. To use
+`gpgcheck=1`, sign packages at build time with `rpmsign` (or let COPR do
+it).
+
+GooGet (Windows):
+
+```
+googet addrepo jm2 https://repo.example/goo/jm2
+googet available
+```
+
+The index pins each package's SHA-256, but GooGet has no index
+signatures. Serve it over HTTPS, or keep it on a trusted LAN.
+
+All clients get the public key from `https://repo.example/crossdock.asc`.
 For pacman, add it with `pacman-key --add` and `--lsign-key`.
+
+| Format | Layout under `current/` |
+|---|---|
+| apt | `deb/<repo>/dists/<suite>/…`, `deb/<repo>/pool/<component>/…` |
+| pacman | `arch/<repo>/<arch>/<repo>.{db,files}` + packages |
+| RPM | `rpm/<repo>/repodata/`, `rpm/<repo>/Packages/<l>/…` |
+| GooGet | `goo/<repo>/index{,.gz}`, `goo/<repo>/packages/<name>.<arch>.<ver>.goo` |
 
 ## Requirements (M1)
 
@@ -158,7 +198,8 @@ The packages depend on all three. Both requirements go away in M2.
 ## Development
 
 ```sh
-make test        # vet + go test -race; the apt end-to-end test runs when gpg, dpkg-deb and apt-get exist
+make test        # vet + go test -race; the apt end-to-end test runs when gpg, dpkg-deb and apt-get exist,
+                 # and the RPM tests check against createrepo_c when `pip install createrepo_c` is done
 make cross       # dist/crossdock-<os>-<arch>
 make deb ARCH=amd64
 ```
