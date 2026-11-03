@@ -6,20 +6,26 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jm2/crossdock/internal/archpkg"
 	"github.com/jm2/crossdock/internal/config"
 	"github.com/jm2/crossdock/internal/deb"
 	"github.com/jm2/crossdock/internal/publish"
+	"github.com/jm2/crossdock/internal/serve"
 	"github.com/jm2/crossdock/internal/sign"
 )
 
@@ -28,9 +34,11 @@ var version = "dev"
 const usage = `usage: crossdock <command> [flags]
 
 commands:
-  publish   build all configured repos into a new release and swap it in
-  inspect   print the metadata crossdock reads from package files
-  version   print the version
+  publish       build all configured repos into a new release and swap it in
+  serve         serve the current release over HTTP (read-only)
+  nginx-config  print an nginx server block matching serve's behaviour
+  inspect       print the metadata crossdock reads from package files
+  version       print the version
 `
 
 func main() {
@@ -46,6 +54,10 @@ func main() {
 		err = cmdPublish(os.Args[2:])
 	case "inspect":
 		err = cmdInspect(os.Args[2:])
+	case "serve":
+		err = cmdServe(os.Args[2:])
+	case "nginx-config":
+		err = cmdNginx(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("crossdock", version)
 	case "help", "-h", "--help":
@@ -209,4 +221,59 @@ func isArch(p string) bool {
 		}
 	}
 	return false
+}
+
+// outputRoot resolves the output directory from -root or the config file.
+func outputRoot(root, cfgPath string) (string, error) {
+	if root != "" {
+		return root, nil
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return "", fmt.Errorf("%w (or pass -root)", err)
+	}
+	return cfg.Output, nil
+}
+
+func cmdServe(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	cfgPath := fs.String("c", "crossdock.json", "config file (for its output directory)")
+	root := fs.String("root", "", "output directory to serve (overrides -c)")
+	listen := fs.String("listen", ":8080", "listen address")
+	index := fs.Bool("index", false, "enable HTML directory listings")
+	quiet := fs.Bool("q", false, "disable the access log")
+	fs.Parse(args)
+
+	out, err := outputRoot(*root, *cfgPath)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(out); err != nil {
+		return fmt.Errorf("output directory: %w", err)
+	}
+	var h http.Handler = &serve.Handler{Output: out, Index: *index}
+	if !*quiet {
+		h = serve.AccessLog(h, log.New(os.Stdout, "", log.LstdFlags|log.LUTC))
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return serve.Run(ctx, *listen, h, func(a net.Addr) {
+		log.Printf("serving %s on http://%s", out, a)
+	})
+}
+
+func cmdNginx(args []string) error {
+	fs := flag.NewFlagSet("nginx-config", flag.ExitOnError)
+	cfgPath := fs.String("c", "crossdock.json", "config file (for its output directory)")
+	root := fs.String("root", "", "output directory (overrides -c)")
+	listen := fs.String("listen", "80", "nginx listen directive value")
+	name := fs.String("server-name", "_", "nginx server_name")
+	index := fs.Bool("index", false, "enable autoindex")
+	fs.Parse(args)
+
+	out, err := outputRoot(*root, *cfgPath)
+	if err != nil {
+		return err
+	}
+	return serve.WriteNginx(os.Stdout, serve.NginxOptions{Output: out, Listen: *listen, ServerName: *name, Index: *index})
 }

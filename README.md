@@ -25,6 +25,42 @@ release directory and swaps `current` atomically, then prunes old releases
 crossdock inspect some.deb some.pkg.tar.zst   # show parsed metadata as JSON
 ```
 
+## Serving
+
+The output is plain static files, so any web server or object store
+works. crossdock ships two ways to serve it with the right headers:
+
+```sh
+crossdock serve -c crossdock.json -listen :8080      # built-in, read-only
+crossdock nginx-config -c crossdock.json -server-name repo.example > /etc/nginx/conf.d/crossdock.conf
+```
+
+Both are generated from one rules table (`internal/serve/rules.go`), so
+they behave identically:
+
+| Paths | Cache-Control |
+|---|---|
+| `InRelease`, `Release*`, `Packages*`, `repomd.xml*`, `*.db`/`*.files` (+`.sig`), GooGet `index`, `/crossdock.{asc,gpg}` | `no-cache` (revalidate via ETag/Last-Modified) |
+| `.deb`, `.rpm`, `.goo`, `.pkg.tar.*` (+`.sig`) | `public, max-age=86400` |
+| `…/by-hash/…` | `public, max-age=31536000, immutable` |
+| everything else | `public, max-age=300` |
+
+`serve` also:
+- resolves `current` once per request, so a publish swaps in between
+  requests and never during one. Each response carries
+  `X-Crossdock-Release`.
+- confines file access to the release with `os.Root`, so symlinks can't
+  escape it, and refuses dotfiles and non-GET/HEAD methods.
+- supports range and conditional requests, an optional `-index` listing,
+  an access log (`-q` turns it off), and graceful shutdown on
+  SIGINT/SIGTERM.
+- exposes `/_crossdock/healthz` and `/_crossdock/release` (JSON).
+
+On a LAN, `serve` alone is enough (see
+`examples/crossdock-serve.service`). On the internet, terminate TLS in
+nginx or Caddy and either serve the directory there with the generated
+config, or reverse-proxy to `serve`.
+
 ## Clients
 
 apt (`/etc/apt/sources.list.d/jm2.sources`):

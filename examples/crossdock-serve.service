@@ -1,0 +1,25 @@
+# Read-only crossdock HTTP server. Run `publish` as a different user that
+# owns the output directory; this unit only needs to read it.
+[Unit]
+Description=crossdock package repository server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/crossdock serve -root /srv/crossdock -listen :8080
+User=crossdock-serve
+Group=crossdock
+Restart=on-failure
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadOnlyPaths=/srv/crossdock
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

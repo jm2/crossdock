@@ -92,7 +92,7 @@ repos:
 ## Architecture
 
 ```
-cmd/crossdock          CLI: publish, inspect, version
+cmd/crossdock          CLI: publish, serve, nginx-config, inspect, version
 internal/config        YAML load + validation + defaults
 internal/publish       release dir, content store, symlink swap, pruning
 internal/sign          OpenPGP: detached (binary/armored), clearsign, pubkey export
@@ -101,6 +101,7 @@ internal/archpkg       .pkg.tar.{zst,xz,gz} parsing (.PKGINFO, file list), pacma
 internal/rpm           (M3) header parsing, repodata XML, header signing
 internal/goo           (M4) .goo parsing, GooGet index
 internal/compress      shared decompressor selection by magic bytes
+internal/serve         HTTP handler, shared cache/type rules, nginx config generator
 ```
 
 Each format backend exposes the same entry point:
@@ -124,6 +125,11 @@ func Publish(repo config.Repo, env *publish.Env) error
    - xz and zstd decompression shell out to `xz` / `zstd`, which matters
      for `.pkg.tar.zst` and for zstd/xz-compressed `control.tar` in debs.
      gzip and bzip2 are native.
+   **Serving** (done, after M1): `crossdock serve`, a read-only stdlib HTTP
+   server, and `crossdock nginx-config`. Both derive caching and content
+   types from one rules table. The output stays plain static files, so
+   any host (nginx, Caddy, S3/R2) keeps working; `serve` is a convenience,
+   not a dependency. TLS stays with a front proxy.
 2. **M2: hardening + go native.** Swap in `ProtonMail/go-crypto` (native
    signing, while keeping the gpg backend for smartcards), `klauspost/compress/zstd`,
    `ulikunitz/xz`, and YAML config. Metadata cache keyed by sha256, so large repos don't

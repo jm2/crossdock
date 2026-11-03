@@ -5,11 +5,14 @@ package main
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jm2/crossdock/internal/serve"
 )
 
 func need(t *testing.T, bins ...string) {
@@ -107,39 +110,15 @@ func TestAptEndToEnd(t *testing.T) {
 		}
 	}
 
-	// A private apt root that trusts nothing but the repo's own key.
-	apt := filepath.Join(work, "aptroot")
-	for _, d := range []string{"etc/apt/sources.list.d", "etc/apt/trusted.gpg.d", "etc/apt/preferences.d",
-		"var/lib/apt/lists/partial", "var/cache/apt/archives/partial", "var/lib/dpkg"} {
-		os.MkdirAll(filepath.Join(apt, d), 0o755)
-	}
-	os.WriteFile(filepath.Join(apt, "var/lib/dpkg/status"), nil, 0o644)
-	src822 := "Types: deb\nURIs: file://" + filepath.Join(cur, "deb", "jm2") +
-		"\nSuites: stable\nComponents: main\nSigned-By: " + filepath.Join(cur, "crossdock.asc") + "\n"
-	os.WriteFile(filepath.Join(apt, "etc/apt/sources.list.d/crossdock.sources"), []byte(src822), 0o644)
-	os.WriteFile(filepath.Join(apt, "etc/apt/sources.list"), nil, 0o644)
-	opts := []string{
-		"-o", "Dir=" + apt,
-		"-o", "Dir::State::status=" + filepath.Join(apt, "var/lib/dpkg/status"),
-		"-o", "Debug::NoLocking=1",
-		"-o", "APT::Architecture=amd64",
-		"-o", "APT::Sandbox::User=root",
-		"-o", "Acquire::Languages=none",
-	}
-	out := run(t, work, "apt-get", append(opts, "update")...)
-	if strings.Contains(out, "NO_PUBKEY") || strings.Contains(out, "not signed") {
-		t.Fatalf("apt-get update did not verify the signature:\n%s", out)
-	}
-	dl := t.TempDir()
-	run(t, dl, "apt-get", append(opts, "download", "hello-crossdock", "crossdock-docs")...)
-	got, _ := filepath.Glob(filepath.Join(dl, "*.deb"))
-	if len(got) != 2 {
-		t.Fatalf("downloaded %v, want 2 packages", got)
-	}
-	policy := run(t, work, "apt-cache", append(opts, "policy", "hello-crossdock")...)
-	if !strings.Contains(policy, "1:1.0-1") {
-		t.Errorf("apt-cache policy missing version:\n%s", policy)
-	}
+	fileOpts := aptRoot(t, filepath.Join(work, "apt-file"), "file://"+filepath.Join(cur, "deb", "jm2"), filepath.Join(cur, "crossdock.asc"))
+	aptInstall(t, work, fileOpts)
+
+	// The same repo through `crossdock serve`, over real HTTP.
+	srv := httptest.NewServer(&serve.Handler{Output: filepath.Join(work, "out")})
+	defer srv.Close()
+	httpOpts := aptRoot(t, filepath.Join(work, "apt-http"), srv.URL+"/deb/jm2", filepath.Join(cur, "crossdock.asc"))
+	aptInstall(t, work, httpOpts)
+	opts, apt := fileOpts, filepath.Join(work, "apt-file")
 
 	// Tampering with an index must be caught by apt's hash checks.
 	pk := filepath.Join(cur, "deb/jm2/dists/crossdock/main/binary-amd64/Packages")
@@ -152,5 +131,47 @@ func TestAptEndToEnd(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err == nil && !strings.Contains(string(out), "Hash Sum mismatch") &&
 		!strings.Contains(string(out), "File has unexpected size") {
 		t.Errorf("apt-get accepted a tampered index:\n%s", out)
+	}
+}
+
+// aptRoot builds a private apt root that trusts nothing but key, with one
+// source, and returns the apt options that select it.
+func aptRoot(t *testing.T, apt, uri, key string) []string {
+	t.Helper()
+	for _, d := range []string{"etc/apt/sources.list.d", "etc/apt/trusted.gpg.d", "etc/apt/preferences.d",
+		"var/lib/apt/lists/partial", "var/cache/apt/archives/partial", "var/lib/dpkg"} {
+		os.MkdirAll(filepath.Join(apt, d), 0o755)
+	}
+	os.WriteFile(filepath.Join(apt, "var/lib/dpkg/status"), nil, 0o644)
+	src := "Types: deb\nURIs: " + uri + "\nSuites: stable\nComponents: main\nSigned-By: " + key + "\n"
+	os.WriteFile(filepath.Join(apt, "etc/apt/sources.list.d/crossdock.sources"), []byte(src), 0o644)
+	os.WriteFile(filepath.Join(apt, "etc/apt/sources.list"), nil, 0o644)
+	return []string{
+		"-o", "Dir=" + apt,
+		"-o", "Dir::State::status=" + filepath.Join(apt, "var/lib/dpkg/status"),
+		"-o", "Debug::NoLocking=1",
+		"-o", "APT::Architecture=amd64",
+		"-o", "APT::Sandbox::User=root",
+		"-o", "Acquire::Languages=none",
+		"-o", "Acquire::http::Proxy=DIRECT",
+	}
+}
+
+// aptInstall runs update, download and policy against an apt root.
+func aptInstall(t *testing.T, work string, opts []string) {
+	t.Helper()
+	out := run(t, work, "apt-get", append(opts, "update")...)
+	if strings.Contains(out, "NO_PUBKEY") || strings.Contains(out, "not signed") || strings.Contains(out, "Ign:") {
+		t.Fatalf("apt-get update did not verify the repo:\n%s", out)
+	}
+	dl := t.TempDir()
+	run(t, dl, "apt-get", append(opts, "download", "hello-crossdock", "crossdock-docs")...)
+	got, _ := filepath.Glob(filepath.Join(dl, "*.deb"))
+	if len(got) != 2 {
+		t.Fatalf("downloaded %v, want 2 packages", got)
+	}
+	policy := run(t, work, "apt-cache", append(opts, "policy", "hello-crossdock")...)
+	if !strings.Contains(policy, "1:1.0-1") {
+		t.Errorf("apt-cache policy missing version:\n%s", policy)
 	}
 }
