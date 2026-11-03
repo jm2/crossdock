@@ -6,6 +6,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,10 @@ func TestLoadPackagedConfig(t *testing.T) {
 	c, err := Load(filepath.Join("..", "..", "build-aux", "etc", "crossdock.yaml"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// It ships only in Linux packages; on Windows its paths aren't absolute.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if len(c.Repos) != 4 || c.Serve.Listen != ":8080" ||
 		c.Signing.KeyFile != "/run/credentials/crossdock-publish.service/signing.asc" {
