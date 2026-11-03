@@ -1,0 +1,26 @@
+{
+  "output": "/srv/crossdock",
+  "keep_releases": 3,
+  "signing": {
+    "key_file": "/etc/crossdock/signing.asc",
+    "passphrase_env": "CROSSDOCK_PASSPHRASE"
+  },
+  "repos": [
+    {
+      "name": "jm2",
+      "format": "arch",
+      "source": "/srv/incoming/arch",
+      "architectures": ["x86_64", "aarch64"],
+      "sign_packages": true
+    },
+    {
+      "name": "jm2",
+      "format": "deb",
+      "source": "/srv/incoming/deb",
+      "suite": "stable",
+      "component": "main",
+      "architectures": ["amd64", "arm64"],
+      "description": "jm2 packages"
+    }
+  ]
+}

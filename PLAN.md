@@ -1,0 +1,150 @@
+# crossdock — plan
+
+crossdock takes one set of built package artifacts and publishes them as
+signed, static package repositories for apt (Debian/Ubuntu), pacman (Arch),
+dnf/yum (RPM), and GooGet (Windows). It runs anywhere as a single static Go
+binary, with no distro tooling (`reprepro`, `createrepo_c`, `repo-add`,
+`rpmsign`) required on the host.
+
+## Goals
+
+- **One binary, any host.** It runs on a NAS, in CI, on macOS or on Windows,
+  with no containers, no `dpkg`, no `pacman`, no `rpm`, and no `gpg` binary
+  required.
+- **Declarative.** A repo's contents are the package files in a source directory.
+  Every publish rebuilds all indexes from that set, so publishing is
+  idempotent and the output is reproducible from the inputs.
+- **Atomic.** Clients never see a half-written index. Each publish builds a new
+  release directory, then swaps a `current` symlink with a single rename.
+- **Signed by default.** One OpenPGP key covers everything; each format gets
+  the signing scheme its client expects.
+- **Static output.** Any web server that can serve files and follow symlinks
+  (nginx, Caddy, `python -m http.server`) is enough.
+
+## Non-goals
+
+- Building packages from source. Use `makepkg`, `dpkg-buildpackage` and
+  `rpmbuild` in CI, or nFPM for repackaging prebuilt binaries. crossdock only
+  ingests what those tools produce.
+- Being a package server with an API, auth or uploads. Uploading means dropping
+  files into the source dir; a systemd path unit or a CI step runs `publish`.
+- Replacing aptly's mirroring and snapshot features.
+
+## Output layout
+
+```
+<output>/
+  current -> releases/20261102T210000Z-ab12cd   # web root points here
+  releases/<id>/                               # immutable once swapped in
+    crossdock.asc, crossdock.gpg               # public key (armored / binary)
+    deb/<repo>/dists/<suite>/{Release,Release.gpg,InRelease}
+    deb/<repo>/dists/<suite>/<component>/binary-<arch>/Packages{,.gz}
+    deb/<repo>/pool/<component>/<p>/<source>/<file>.deb
+    arch/<repo>/<arch>/{<repo>.db,<repo>.files}[.tar.gz][.sig] + packages
+    rpm/<repo>/<arch>/{repodata/,*.rpm}        # milestone 3
+    goo/<repo>/{index,packages/*.goo}          # milestone 4
+  store/<sha256>                               # content store, hardlinked into releases
+```
+
+Package payloads are copied into `store/` once and hardlinked into each
+release, so keeping N releases costs only their metadata. After a publish,
+releases older than `keep_releases` are pruned, along with any store objects
+no release still links.
+
+Client config examples:
+
+```
+# apt
+deb [signed-by=/etc/apt/keyrings/crossdock.asc] https://repo.example/deb/jm2 stable main
+# pacman
+[jm2]
+Server = https://repo.example/arch/$repo/$arch
+```
+
+## Configuration
+
+M1 reads `crossdock.json`. The schema below is shown as YAML, which takes
+over once third-party dependencies are pulled in (M2); the field names are
+the same.
+
+```yaml
+output: /srv/crossdock
+keep_releases: 3
+signing:
+  key_file: /etc/crossdock/signing.asc   # armored private key
+  passphrase_env: CROSSDOCK_PASSPHRASE   # optional
+repos:
+  - name: jm2
+    format: arch
+    source: /srv/incoming/arch
+    architectures: [x86_64, aarch64]     # "any" packages land in each
+    sign_packages: true                  # create missing .sig files
+  - name: jm2
+    format: deb
+    source: /srv/incoming/deb
+    suite: stable
+    component: main
+    origin: jm2
+    label: jm2
+    architectures: [amd64, arm64]        # "all" packages land in each
+```
+
+## Architecture
+
+```
+cmd/crossdock          CLI: publish, inspect, version
+internal/config        YAML load + validation + defaults
+internal/publish       release dir, content store, symlink swap, pruning
+internal/sign          OpenPGP: detached (binary/armored), clearsign, pubkey export
+internal/deb           .deb parsing (ar + control.tar.{gz,xz,zst}), apt index writer
+internal/archpkg       .pkg.tar.{zst,xz,gz} parsing (.PKGINFO, file list), pacman db writer
+internal/rpm           (M3) header parsing, repodata XML, header signing
+internal/goo           (M4) .goo parsing, GooGet index
+internal/compress      shared decompressor selection by magic bytes
+```
+
+Each format backend exposes the same entry point:
+
+```go
+// Publish reads packages from repo.Source and writes a complete, signed
+// repo tree into env.Release, adding payloads through the content store.
+func Publish(repo config.Repo, env *publish.Env) error
+```
+
+## Milestones
+
+1. **M1: core + apt + pacman** (done). Config, atomic publish, content
+   store, signing, Debian and Arch backends, `inspect`, and an end-to-end
+   test in which a real `apt-get` verifies, updates from and downloads from
+   a signed repo, and rejects a tampered index.
+   M1 was written with **standard library only** (the bootstrap environment
+   couldn't reach the Go module proxy). The temporary shortcuts:
+   - JSON config instead of YAML.
+   - Signing shells out to `gpg` (behind `sign.Signer`).
+   - xz and zstd decompression shell out to `xz` / `zstd`, which matters
+     for `.pkg.tar.zst` and for zstd/xz-compressed `control.tar` in debs.
+     gzip and bzip2 are native.
+2. **M2: hardening + go native.** Swap in `ProtonMail/go-crypto` (native
+   signing, while keeping the gpg backend for smartcards), `klauspost/compress/zstd`,
+   `ulikunitz/xz`, and YAML config. Metadata cache keyed by sha256, so large repos don't
+   re-read every package; `Acquire-By-Hash` for apt; `Valid-Until` as an
+   option; validating pacman db output against real `pacman`; a systemd
+   path unit and an nginx example; release tooling (GoReleaser, with
+   crossdock packaging itself).
+3. **M3: RPM.** Parse headers (`sassoftware/go-rpmutils`), write
+   `primary/filelists/other.xml.gz` and `repomd.xml` (+ `.asc`), and sign
+   package headers so `gpgcheck=1` works. Test against real `dnf` in CI.
+4. **M4: GooGet.** Parse `.goo` (zip + goospec), write the JSON `index`, and
+   optionally verify Authenticode on payloads. Test with a `googet`
+   client on Windows CI.
+5. **M5: packaging glue (optional).** Build packages from one nFPM spec
+   (deb/rpm/arch), plus a `.goo` writer, so `-bin` style packages come from one
+   definition.
+
+## Open questions
+
+- Should pacman dbs use gzip (`repo-add`'s default, widest compatibility) or
+  zstd? Plan: gzip by default, zstd as an option.
+- Should signatures be required for every published package, with a hard
+  failure if no key is configured? Plan: unsigned only with `--allow-unsigned`.
+- Should GooGet use one index per repo or one per arch?
