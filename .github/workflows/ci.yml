@@ -1,0 +1,164 @@
+name: CI
+# Every action is pinned to a full commit SHA; Dependabot keeps the pins and
+# their version comments current.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  fmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check formatting
+        run: make fmt-check
+
+  vet:
+    name: go vet (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Vet type-checks the test files too, so this also proves the tests
+      # compile for every release target.
+      - name: Vet
+        env:
+          GOOS: ${{ matrix.goos }}
+        run: go vet ./...
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows publishes without symlinks (current.id and copies); the
+        # tests that need apt, gpg or createrepo_c skip themselves there.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # With createrepo_c installed, the RPM tests check crossdock's
+      # repodata against createrepo_c's own output, field for field.
+      - name: Install createrepo_c
+        if: runner.os == 'Linux'
+        run: pip install --break-system-packages createrepo_c
+
+      # On Linux the apt end-to-end test runs against the runner's real
+      # gpg, dpkg-deb and apt-get; elsewhere it skips itself.
+      - name: Test
+        run: go test -race -count=1 -fullpath ./...
+
+  # Real dnf (dnf5) against a signed repo served by `crossdock serve`:
+  # repo_gpgcheck verifies repomd.xml.asc, then dnf lists and downloads the
+  # packages; a tampered repomd.xml must be rejected.
+  dnf:
+    name: dnf against crossdock (Fedora)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: fedora:44
+    steps:
+      - name: Install dependencies
+        run: dnf install -y --setopt=install_weak_deps=False git-core golang gnupg2 xz zstd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish, serve and use the repo with dnf
+        run: |
+          set -euo pipefail
+          go build -o /usr/local/bin/crossdock ./cmd/crossdock
+          work=$(mktemp -d)
+          export GNUPGHOME=$work/gnupg
+          mkdir -m 0700 "$GNUPGHOME"
+          gpg --batch --passphrase '' --quick-gen-key "crossdock CI <ci@example.invalid>" ed25519 sign never
+          gpg --batch --armor --export-secret-keys > "$work/signing.asc"
+          mkdir "$work/in"
+          for f in internal/rpm/testdata/*.rpm; do
+            case "$f" in */empty-signed-*) ;; *) cp "$f" "$work/in/" ;; esac
+          done
+          cat > "$work/crossdock.json" <<EOF
+          {"output": "$work/out", "signing": {"key_file": "$work/signing.asc"},
+           "repos": [{"name": "t", "format": "rpm", "source": "$work/in"}]}
+          EOF
+          crossdock publish -c "$work/crossdock.json"
+          crossdock serve -q -c "$work/crossdock.json" -listen 127.0.0.1:8080 &
+          sleep 1
+          dnf_repo=(--setopt=reposdir=/dev/null "--repofrompath=crossdock,http://127.0.0.1:8080/rpm/t"
+            --setopt=crossdock.repo_gpgcheck=1 --setopt=crossdock.gpgcheck=0
+            --setopt=crossdock.gpgkey=http://127.0.0.1:8080/crossdock.asc --repo=crossdock -y)
+          dnf "${dnf_repo[@]}" makecache
+          dnf "${dnf_repo[@]}" repoquery --qf '%{full_nevra}\n' | sort | tee "$work/nevras"
+          test "$(grep -vc '\.src$' "$work/nevras")" -eq 8
+          dnf "${dnf_repo[@]}" repoquery --provides Archer | grep -qx 'barb >= 11.22.33-44'
+          dnf "${dnf_repo[@]}" repoquery --requires Archer | grep -qx 'fooa <= 2'
+          cd "$work" && dnf "${dnf_repo[@]}" download Rimmer && ls Rimmer-*.rpm
+          # A repomd.xml that no longer matches its signature must fail.
+          cur=$(readlink -f "$work/out/current")
+          sed -i 's|<revision>|<revision>1|' "$cur/rpm/t/repodata/repomd.xml"
+          dnf clean all >/dev/null
+          if dnf "${dnf_repo[@]}" makecache; then
+            echo "::error::dnf accepted a repomd.xml with a bad signature"
+            exit 1
+          fi
+
+  # Builds the .deb, installs it, and runs crossdock the packaged way under
+  # the runner's real systemd: path-triggered publishing, the LAN server on
+  # :8080, and apt installing and upgrading from it.
+  packaging:
+    name: Package and system services (deb, systemd)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build the .deb
+        run: |
+          make cross
+          make deb ARCH=amd64 VERSION=v0.0.0-ci
+          dpkg-deb --contents dist/crossdock-amd64.deb
+
+      - name: Install it and run the system service smoke test
+        run: |
+          sudo apt-get install -y ./dist/crossdock-amd64.deb
+          sudo build-aux/ci/system-service-smoke.sh
