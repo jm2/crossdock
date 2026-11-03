@@ -1,0 +1,30 @@
+name: Dependabot auto-merge
+# Turns on auto-merge for Dependabot's minor and patch updates (and any
+# security update that isn't a major bump), so they merge by themselves
+# once the required CI checks on main pass. Major updates are left for a
+# person to review. The job runs no code from the PR: it only reads
+# Dependabot's metadata and calls `gh pr merge --auto`.
+on: pull_request
+permissions:
+  contents: read
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'jm2/crossdock'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - name: Enable auto-merge (squash)
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
