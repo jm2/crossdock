@@ -31,9 +31,15 @@ func TestMatch(t *testing.T) {
 		"/deb/jm2/pool/main/h/hello/hello_1.0_amd64.deb":            "package",
 		"/rpm/jm2/x86_64/repodata/repomd.xml":                       "metadata",
 		"/goo/jm2/index":                                            "metadata",
-		"/crossdock.asc":                                            "metadata",
-		"/deb/jm2/crossdock.asc":                                    "default",
-		"/README.txt":                                               "default",
+		"/goo/jm2/index.gz":                                         "metadata",
+		"/goo/jm2/packages/tool.x86_64.1.2.3@4.goo":                 "package",
+		"/rpm/jm2/repodata/repomd.xml.asc":                          "metadata",
+		"/rpm/jm2/repodata/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-primary.xml.gz": "by-hash",
+		"/rpm/jm2/Packages/a/Archer-3.4.5-6.x86_64.rpm":                                                     "package",
+		"/rpm/jm2/Packages/a/repodata-tool-1-1.noarch.rpm":                                                  "package",
+		"/crossdock.asc":         "metadata",
+		"/deb/jm2/crossdock.asc": "default",
+		"/README.txt":            "default",
 	} {
 		if got := Match(p).Name; got != want {
 			t.Errorf("Match(%q) = %s, want %s", p, got, want)
