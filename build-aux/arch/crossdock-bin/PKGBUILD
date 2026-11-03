@@ -1,0 +1,30 @@
+# Maintainer: crossdock contributors <https://github.com/jm2/crossdock>
+#
+# AUR package: the prebuilt release, repackaged from the release's .deb
+# files (static Go binary, systemd units, and the sysusers.d and tmpfiles.d
+# entries, which pacman's hooks apply). To update: set pkgver, run
+# `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO`, and check the sums
+# against the release's SHA256SUMS.txt.
+pkgname=crossdock-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Publish packages as signed apt, pacman, RPM and GooGet repositories (with server and systemd units)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/jm2/crossdock"
+license=('GPL-3.0-or-later')
+provides=('crossdock')
+conflicts=('crossdock')
+depends=('gnupg' 'xz' 'zstd')
+optdepends=('firewalld: the bundled crossdock service definition')
+backup=('etc/crossdock/crossdock.json')
+options=('!strip' '!debug')
+source_x86_64=("crossdock-$pkgver-amd64.deb::$url/releases/download/v$pkgver/crossdock-amd64.deb")
+source_aarch64=("crossdock-$pkgver-arm64.deb::$url/releases/download/v$pkgver/crossdock-arm64.deb")
+sha256sums_x86_64=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums_aarch64=('0000000000000000000000000000000000000000000000000000000000000000')
+
+package() {
+  bsdtar -xf data.tar.* -C "$pkgdir"
+  # Arch keeps license texts in the licenses package; GPL-3.0 is there.
+  rm -rf "$pkgdir/usr/share/lintian" "$pkgdir/usr/share/doc/crossdock/changelog.gz" "$pkgdir/usr/share/doc/crossdock/copyright"
+}

@@ -130,9 +130,17 @@ func Publish(repo config.Repo, env *publish.Env) error
    types from one rules table. The output stays plain static files, so
    any host (nginx, Caddy, S3/R2) keeps working; `serve` is a convenience,
    not a dependency. TLS stays with a front proxy.
+   **Packaging** (done): `.deb`, `.rpm` (COPR via Packit), Arch PKGBUILD
+   plus AUR `-bin`, systemd units (`crossdock-serve` as a LAN-only
+   DynamicUser on :8080, `crossdock-publish.service` + `.path`),
+   sysusers.d/tmpfiles.d, and a firewalld service. The release workflow
+   mirrors jm2/switchworks.
 2. **M2: hardening + go native.** Swap in `ProtonMail/go-crypto` (native
    signing, while keeping the gpg backend for smartcards), `klauspost/compress/zstd`,
-   `ulikunitz/xz`, and YAML config. Metadata cache keyed by sha256, so large repos don't
+   `ulikunitz/xz`, and YAML config, which drops the gpg/xz/zstd package
+   dependencies. Windows: publish without symlink privileges (copy
+   fallback for `current` and in-release links), then add Windows to the
+   CI test matrix. Metadata cache keyed by sha256, so large repos don't
    re-read every package; `Acquire-By-Hash` for apt; `Valid-Until` as an
    option; validating pacman db output against real `pacman`; a systemd
    path unit and an nginx example; release tooling (GoReleaser, with

@@ -61,6 +61,13 @@ func New(c *config.Signing) (*GPG, error) {
 		}
 		g.passphrase = v
 	}
+	if c.PassphraseFile != "" {
+		b, err := os.ReadFile(c.PassphraseFile)
+		if err != nil {
+			return nil, fmt.Errorf("passphrase file: %w", err)
+		}
+		g.passphrase = strings.TrimRight(string(b), "\r\n")
+	}
 	if c.GnuPGHome != "" {
 		g.home = c.GnuPGHome
 	} else {

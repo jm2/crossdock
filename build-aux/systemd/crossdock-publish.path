@@ -1,0 +1,21 @@
+# Republishes when packages are added to, removed from or renamed in the
+# incoming directories. It watches only these directories, not their
+# subdirectories. If you point the config somewhere else, override the
+# paths with `systemctl edit crossdock-publish.path`:
+#
+#   [Path]
+#   PathChanged=
+#   PathChanged=/srv/packages/deb
+#
+#   sudo systemctl enable --now crossdock-publish.path
+[Unit]
+Description=crossdock: republish when packages are uploaded
+Documentation=https://github.com/jm2/crossdock
+
+[Path]
+PathChanged=/var/lib/crossdock/incoming/deb
+PathChanged=/var/lib/crossdock/incoming/arch
+Unit=crossdock-publish.service
+
+[Install]
+WantedBy=paths.target

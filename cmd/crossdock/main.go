@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,8 @@ import (
 	"github.com/jm2/crossdock/internal/sign"
 )
 
+// version is stamped at build time with
+// -ldflags "-X main.version=v1.2.3"; it must stay a variable.
 var version = "dev"
 
 const usage = `usage: crossdock <command> [flags]
@@ -59,7 +62,7 @@ func main() {
 	case "nginx-config":
 		err = cmdNginx(os.Args[2:])
 	case "version", "--version", "-v":
-		fmt.Println("crossdock", version)
+		fmt.Println("crossdock", version, runtime.GOOS+"/"+runtime.GOARCH, runtime.Version())
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -223,41 +226,48 @@ func isArch(p string) bool {
 	return false
 }
 
-// outputRoot resolves the output directory from -root or the config file.
-func outputRoot(root, cfgPath string) (string, error) {
+// serveSettings resolves the output directory and serve settings from
+// -root or the config file.
+func serveSettings(root, cfgPath string) (string, config.Serve, error) {
 	if root != "" {
-		return root, nil
+		return root, config.Serve{Listen: config.DefaultListen}, nil
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return "", fmt.Errorf("%w (or pass -root)", err)
+		return "", config.Serve{}, fmt.Errorf("%w (or pass -root)", err)
 	}
-	return cfg.Output, nil
+	return cfg.Output, cfg.Serve, nil
 }
 
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("c", "crossdock.json", "config file (for its output directory)")
 	root := fs.String("root", "", "output directory to serve (overrides -c)")
-	listen := fs.String("listen", ":8080", "listen address")
-	index := fs.Bool("index", false, "enable HTML directory listings")
+	listen := fs.String("listen", "", "listen address (default: config serve.listen, else "+config.DefaultListen+")")
+	index := fs.Bool("index", false, "enable HTML directory listings (also config serve.index)")
 	quiet := fs.Bool("q", false, "disable the access log")
 	fs.Parse(args)
 
-	out, err := outputRoot(*root, *cfgPath)
+	out, sc, err := serveSettings(*root, *cfgPath)
 	if err != nil {
 		return err
+	}
+	if *listen != "" {
+		sc.Listen = *listen
+	}
+	if *index {
+		sc.Index = true
 	}
 	if _, err := os.Stat(out); err != nil {
 		return fmt.Errorf("output directory: %w", err)
 	}
-	var h http.Handler = &serve.Handler{Output: out, Index: *index}
+	var h http.Handler = &serve.Handler{Output: out, Index: sc.Index}
 	if !*quiet {
 		h = serve.AccessLog(h, log.New(os.Stdout, "", log.LstdFlags|log.LUTC))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return serve.Run(ctx, *listen, h, func(a net.Addr) {
+	return serve.Run(ctx, sc.Listen, h, func(a net.Addr) {
 		log.Printf("serving %s on http://%s", out, a)
 	})
 }
@@ -271,7 +281,7 @@ func cmdNginx(args []string) error {
 	index := fs.Bool("index", false, "enable autoindex")
 	fs.Parse(args)
 
-	out, err := outputRoot(*root, *cfgPath)
+	out, _, err := serveSettings(*root, *cfgPath)
 	if err != nil {
 		return err
 	}

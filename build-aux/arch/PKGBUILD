@@ -1,0 +1,46 @@
+# Maintainer: crossdock contributors <https://github.com/jm2/crossdock>
+#
+# Builds the crossdock checkout it is copied into. The AUR packages are
+# maintained separately (build-aux/arch/crossdock-bin/ is the -bin one).
+# From the repository root:
+#   cp build-aux/arch/PKGBUILD . && CROSSDOCK_VERSION=v0.1.0 makepkg -sf
+pkgname=crossdock
+# The release workflow passes the tag (CROSSDOCK_VERSION=v0.2.0-rc.1).
+# pkgver can't hold "-", and "0.2.0rc.1" sorts before "0.2.0" as it should.
+_tag=${CROSSDOCK_VERSION:-v0.1.0}
+pkgver=${_tag#v}
+pkgver=${pkgver//-/}
+pkgrel=1
+pkgdesc="Publish packages as signed apt, pacman, RPM and GooGet repositories (with server and systemd units)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/jm2/crossdock"
+license=('GPL-3.0-or-later')
+options=('!lto' '!debug' '!strip')
+depends=('gnupg' 'xz' 'zstd')
+optdepends=('firewalld: the bundled crossdock service definition')
+makedepends=('go' 'make')
+backup=('etc/crossdock/crossdock.json')
+source=()
+
+build() {
+  cd "$startdir"
+  # go.mod names the Go release to build with; fetch it if the system Go is
+  # older.
+  export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}" GOFLAGS="${GOFLAGS:+$GOFLAGS }-mod=readonly"
+  make build VERSION="$_tag"
+}
+
+check() {
+  cd "$startdir"
+  ./crossdock version | grep -F "crossdock $_tag "
+}
+
+package() {
+  cd "$startdir"
+  mkdir -p bin-stage
+  cp crossdock bin-stage/
+  build-aux/linux/install-tree.sh "$pkgdir" bin-stage /usr
+  rm -rf bin-stage
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

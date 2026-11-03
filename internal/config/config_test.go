@@ -48,3 +48,22 @@ func TestRelativePaths(t *testing.T) {
 		t.Errorf("paths not resolved against config dir: %s %s", c.Output, c.Repos[0].Source)
 	}
 }
+
+func TestEnvExpansionAndServeDefaults(t *testing.T) {
+	t.Setenv("CREDENTIALS_DIRECTORY", "/run/credentials/crossdock-publish.service")
+	p := filepath.Join(t.TempDir(), "c.json")
+	os.WriteFile(p, []byte(`{"output":"/var/lib/crossdock/repo",
+		"signing":{"key_file":"${CREDENTIALS_DIRECTORY}/signing.asc","passphrase_file":"$CREDENTIALS_DIRECTORY/passphrase"},
+		"repos":[{"name":"a","format":"deb","source":"/in"}]}`), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Signing.KeyFile != "/run/credentials/crossdock-publish.service/signing.asc" ||
+		c.Signing.PassphraseFile != "/run/credentials/crossdock-publish.service/passphrase" {
+		t.Errorf("not expanded: %+v", c.Signing)
+	}
+	if c.Serve.Listen != ":8080" {
+		t.Errorf("serve.listen default = %q", c.Serve.Listen)
+	}
+}

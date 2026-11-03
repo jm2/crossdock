@@ -1,0 +1,67 @@
+# crossdock's read-only HTTP server for the published repositories.
+#
+# It listens on port 8080 on every interface (serve.listen in
+# /etc/crossdock/crossdock.json), and the firewall rules below only let LAN
+# addresses connect: loopback, link-local, RFC 1918, CGNAT/Tailscale
+# (100.64.0.0/10) and IPv6 ULA. To serve beyond the LAN, put nginx or
+# Caddy in front (`crossdock nginx-config`) or widen the allow list with a
+# drop-in (`systemctl edit crossdock-serve`):
+#
+#   [Service]
+#   IPAddressAllow=any
+#
+# The packages ship this unit disabled:
+#
+#   sudo systemctl enable --now crossdock-serve
+[Unit]
+Description=crossdock package repository server
+Documentation=https://github.com/jm2/crossdock
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/crossdock/crossdock.json
+
+[Service]
+ExecStart=@CROSSDOCK@ serve -c /etc/crossdock/crossdock.json
+# A throwaway account: the published tree is world-readable static files,
+# so the server needs no identity and can write nothing.
+DynamicUser=yes
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=35
+
+IPAddressDeny=any
+IPAddressAllow=localhost link-local multicast
+IPAddressAllow=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10
+IPAddressAllow=fc00::/7
+
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RemoveIPC=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

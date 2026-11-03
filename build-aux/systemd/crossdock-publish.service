@@ -1,0 +1,65 @@
+# Rebuilds every configured repository from /var/lib/crossdock/incoming
+# and swaps the new release in atomically. crossdock-publish.path starts it
+# when packages are uploaded; run it by hand with
+#
+#   sudo systemctl start crossdock-publish
+#
+# It runs as the crossdock account, which owns /var/lib/crossdock/repo. The
+# signing key stays root-only in /etc/crossdock/signing.asc and reaches the
+# service as a systemd credential, so the crossdock account itself can't
+# read it. For a passphrase-protected key, add with `systemctl edit
+# crossdock-publish`:
+#
+#   [Service]
+#   LoadCredential=passphrase:/etc/crossdock/passphrase
+#
+# and set "passphrase_file": "${CREDENTIALS_DIRECTORY}/passphrase" under
+# "signing" in /etc/crossdock/crossdock.json.
+[Unit]
+Description=crossdock: publish package repositories
+Documentation=https://github.com/jm2/crossdock
+ConditionPathExists=/etc/crossdock/crossdock.json
+ConditionPathExists=/etc/crossdock/signing.asc
+
+[Service]
+Type=oneshot
+User=crossdock
+Group=crossdock
+# Let a burst of uploads land before reading them. Upload with rsync (or to
+# a dotfile, then rename): crossdock skips dotfiles, so it never reads a
+# half-written package.
+ExecStartPre=/usr/bin/sleep 5
+ExecStart=@CROSSDOCK@ publish -c /etc/crossdock/crossdock.json
+LoadCredential=signing.asc:/etc/crossdock/signing.asc
+TimeoutStartSec=30min
+
+UMask=0022
+ReadWritePaths=/var/lib/crossdock/repo
+# Publishing needs no network; gpg talks to its agent over a Unix socket.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RemoveIPC=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM

@@ -1,0 +1,27 @@
+{
+  "output": "/var/lib/crossdock/repo",
+  "keep_releases": 3,
+  "signing": {
+    "key_file": "${CREDENTIALS_DIRECTORY}/signing.asc"
+  },
+  "serve": {
+    "listen": ":8080"
+  },
+  "repos": [
+    {
+      "name": "local",
+      "format": "deb",
+      "source": "/var/lib/crossdock/incoming/deb",
+      "suite": "stable",
+      "component": "main",
+      "architectures": ["amd64", "arm64"]
+    },
+    {
+      "name": "local",
+      "format": "arch",
+      "source": "/var/lib/crossdock/incoming/arch",
+      "architectures": ["x86_64", "aarch64"],
+      "sign_packages": true
+    }
+  ]
+}

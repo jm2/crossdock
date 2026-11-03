@@ -1,0 +1,5 @@
+# The account crossdock-publish.service runs as. It owns the published
+# repositories in /var/lib/crossdock/repo. Members of the crossdock group
+# can upload packages to /var/lib/crossdock/incoming. It has no password
+# and no login shell.
+u crossdock - "crossdock repository publisher" /var/lib/crossdock

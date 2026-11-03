@@ -35,7 +35,21 @@ type Config struct {
 	KeepReleases int `json:"keep_releases"`
 	// Signing configures the OpenPGP key. Nil means unsigned.
 	Signing *Signing `json:"signing,omitempty"`
-	Repos   []Repo   `json:"repos"`
+	// Serve configures `crossdock serve`.
+	Serve Serve  `json:"serve,omitempty"`
+	Repos []Repo `json:"repos"`
+}
+
+// DefaultListen is serve's default address: every interface, port 8080,
+// so the repo is reachable on the LAN without root or a reverse proxy.
+const DefaultListen = ":8080"
+
+// Serve configures the built-in HTTP server.
+type Serve struct {
+	// Listen is the TCP address to listen on (default ":8080").
+	Listen string `json:"listen,omitempty"`
+	// Index enables HTML directory listings.
+	Index bool `json:"index,omitempty"`
 }
 
 // Signing configures repository and package signatures.
@@ -49,6 +63,9 @@ type Signing struct {
 	KeyID string `json:"key_id,omitempty"`
 	// PassphraseEnv names an environment variable holding the passphrase.
 	PassphraseEnv string `json:"passphrase_env,omitempty"`
+	// PassphraseFile reads the passphrase from a file (trailing newline
+	// trimmed), e.g. a systemd credential.
+	PassphraseFile string `json:"passphrase_file,omitempty"`
 }
 
 // Repo is one published repository.
@@ -77,8 +94,9 @@ type Repo struct {
 
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
-// Load reads, defaults and validates a config file. Relative paths in the
-// config are resolved against the config file's directory.
+// Load reads, defaults and validates a config file. Paths in the config
+// may reference environment variables ("${CREDENTIALS_DIRECTORY}/key.asc"),
+// and relative paths are resolved against the config file's directory.
 func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -103,6 +121,7 @@ func Load(path string) (*Config, error) {
 }
 
 func abs(base, p string) string {
+	p = os.ExpandEnv(p)
 	if p == "" || filepath.IsAbs(p) {
 		return p
 	}
@@ -114,6 +133,7 @@ func (c *Config) resolve(base string) {
 	if c.Signing != nil {
 		c.Signing.KeyFile = abs(base, c.Signing.KeyFile)
 		c.Signing.GnuPGHome = abs(base, c.Signing.GnuPGHome)
+		c.Signing.PassphraseFile = abs(base, c.Signing.PassphraseFile)
 	}
 	for i := range c.Repos {
 		c.Repos[i].Source = abs(base, c.Repos[i].Source)
@@ -123,6 +143,9 @@ func (c *Config) resolve(base string) {
 func (c *Config) applyDefaults() {
 	if c.KeepReleases <= 0 {
 		c.KeepReleases = 3
+	}
+	if c.Serve.Listen == "" {
+		c.Serve.Listen = DefaultListen
 	}
 	for i := range c.Repos {
 		r := &c.Repos[i]
@@ -157,6 +180,9 @@ func (c *Config) Validate() error {
 		}
 		if s.GnuPGHome != "" && s.KeyID == "" {
 			return fmt.Errorf("signing: key_id is required with gnupg_home")
+		}
+		if s.PassphraseEnv != "" && s.PassphraseFile != "" {
+			return fmt.Errorf("signing: set at most one of passphrase_env or passphrase_file")
 		}
 	}
 	if len(c.Repos) == 0 {

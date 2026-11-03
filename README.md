@@ -7,23 +7,86 @@ tooling and no containers.
 > Status: M1. apt and pacman work; RPM and GooGet are planned. See
 > [PLAN.md](PLAN.md).
 
-## Quick start
+## Install
+
+Release packages are on the [releases page](https://github.com/jm2/crossdock/releases):
 
 ```sh
-go install github.com/jm2/crossdock/cmd/crossdock@latest
-
-cp examples/crossdock.json /etc/crossdock/crossdock.json   # edit paths
-crossdock publish -c /etc/crossdock/crossdock.json
+sudo dnf install ./crossdock-x86_64.rpm            # Fedora (or: dnf copr enable jmsqrd/crossdock)
+sudo apt install ./crossdock-amd64.deb             # Debian, Ubuntu
+sudo pacman -U crossdock-x86_64.pkg.tar.zst        # Arch (or the AUR's crossdock-bin)
+go install github.com/jm2/crossdock/cmd/crossdock@latest   # anywhere, binary only
 ```
 
-Point your web server at `<output>/current`. Each publish builds a fresh
-release directory and swaps `current` atomically, then prunes old releases
-(`keep_releases`, default 3). Package payloads are deduplicated in
-`<output>/store` and hardlinked into releases.
+The packages install:
+
+| | |
+|---|---|
+| `/usr/bin/crossdock` | the binary |
+| `/etc/crossdock/crossdock.json` | config: `deb` and `arch` repos named `local`, served on `:8080` (kept on upgrade) |
+| `crossdock-serve.service` | the read-only server, as a throwaway `DynamicUser`, **LAN-only** |
+| `crossdock-publish.service` / `.path` | republish when files land in `/var/lib/crossdock/incoming/{deb,arch}` |
+| `crossdock` account (sysusers.d) | owns `/var/lib/crossdock/repo`; members of its group can upload |
+| `/var/lib/crossdock` (tmpfiles.d) | `repo/` (published, world-readable) and `incoming/` (setgid, group-writable) |
+| firewalld `crossdock` service | opens 8080/tcp |
+
+Nothing is enabled at install.
+
+## Run it as a service (no web server needed)
 
 ```sh
-crossdock inspect some.deb some.pkg.tar.zst   # show parsed metadata as JSON
+# 1. A signing key. Keep it root-only; systemd hands it to the publisher
+#    as a credential, so the crossdock account itself can't read it.
+gpg --batch --passphrase '' --quick-gen-key "My repo <repo@example.lan>" ed25519 sign never
+gpg --armor --export-secret-keys "repo@example.lan" | sudo install -m 0600 /dev/stdin /etc/crossdock/signing.asc
+
+# 2. Start serving and auto-publishing, then publish once.
+sudo systemctl enable --now crossdock-serve crossdock-publish.path
+sudo systemctl start crossdock-publish
+sudo firewall-cmd --permanent --add-service=crossdock && sudo firewall-cmd --reload   # Fedora
+
+# 3. Upload. Use rsync (or copy to a dotfile and rename), so publish never
+#    reads a half-written file.
+sudo usermod -aG crossdock "$USER"     # log in again afterwards
+rsync -av *.deb nas:/var/lib/crossdock/incoming/deb/
+rsync -av *.pkg.tar.zst nas:/var/lib/crossdock/incoming/arch/
 ```
+
+Clients then use `http://nas:8080/deb/local` and
+`http://nas:8080/arch/$repo/$arch` (see [Clients](#clients)).
+
+**LAN only by default.** `crossdock-serve` listens on every interface on
+port 8080, but systemd's IP filtering only accepts loopback, link-local,
+RFC 1918, 100.64.0.0/10 (CGNAT/Tailscale) and IPv6 ULA clients. To change
+the port, set `serve.listen` in the config. To allow other networks, use a
+drop-in (`sudo systemctl edit crossdock-serve`):
+
+```ini
+[Service]
+IPAddressAllow=203.0.113.0/24      # or: IPAddressAllow=any
+```
+
+To serve on port 80 without a proxy, set `"listen": ":80"` and add
+`AmbientCapabilities=CAP_NET_BIND_SERVICE` and
+`CapabilityBoundingSet=CAP_NET_BIND_SERVICE` in the same drop-in.
+
+There's no TLS. apt and pacman verify the repos' signatures, so plain HTTP
+is fine on a LAN. For the internet, put nginx or Caddy in front (see
+[Serving](#serving)).
+
+## Run it by hand
+
+```sh
+crossdock publish -c crossdock.json          # see examples/crossdock.json
+crossdock serve -c crossdock.json
+crossdock inspect some.deb some.pkg.tar.zst  # show parsed metadata as JSON
+```
+
+Each publish builds a fresh release directory, swaps `current` atomically,
+and prunes old releases (`keep_releases`, default 3). If a publish fails,
+the previous release stays live. Package payloads are deduplicated in
+`<output>/store` and hardlinked into releases. Paths in the config can
+use environment variables, e.g. `${CREDENTIALS_DIRECTORY}/signing.asc`.
 
 ## Serving
 
@@ -31,7 +94,7 @@ The output is plain static files, so any web server or object store
 works. crossdock ships two ways to serve it with the right headers:
 
 ```sh
-crossdock serve -c crossdock.json -listen :8080      # built-in, read-only
+crossdock serve -c crossdock.json                    # built-in, read-only, :8080
 crossdock nginx-config -c crossdock.json -server-name repo.example > /etc/nginx/conf.d/crossdock.conf
 ```
 
@@ -57,7 +120,7 @@ they behave identically:
 - exposes `/_crossdock/healthz` and `/_crossdock/release` (JSON).
 
 On a LAN, `serve` alone is enough (see
-`examples/crossdock-serve.service`). On the internet, terminate TLS in
+[Run it as a service](#run-it-as-a-service-no-web-server-needed)). On the internet, terminate TLS in
 nginx or Caddy and either serve the directory there with the generated
 config, or reverse-proxy to `serve`.
 
@@ -87,15 +150,27 @@ For pacman, add it with `pacman-key --add` and `--lsign-key`.
 
 - `gpg` for signing (any key gpg can use, including smartcards via
   `gnupg_home` + `key_id`).
-- `xz` / `zstd` binaries when reading xz- or zstd-compressed packages.
+- `xz` and `zstd` binaries for reading xz- or zstd-compressed packages.
+  That covers every `.pkg.tar.zst`, and Ubuntu's `dpkg-deb` default.
 
-Both requirements go away in M2.
+The packages depend on all three. Both requirements go away in M2.
 
 ## Development
 
 ```sh
-go test ./...   # the apt end-to-end test runs when gpg, dpkg-deb and apt-get exist
+make test        # vet + go test -race; the apt end-to-end test runs when gpg, dpkg-deb and apt-get exist
+make cross       # dist/crossdock-<os>-<arch>
+make deb ARCH=amd64
 ```
+
+Packaging lives in `build-aux/`, and every package installs the same tree
+through `build-aux/linux/install-tree.sh`. CI installs the `.deb` on a
+runner with real systemd and runs `build-aux/ci/system-service-smoke.sh`.
+That test does a path-triggered publish, then has apt install and upgrade
+from `:8080`. Tagging `vX.Y.Z` with a matching `CHANGELOG.md` section
+builds the archives, `.deb`, `.rpm` (Fedora 44) and Arch package, then
+creates a draft release with `SHA256SUMS.txt` and provenance attestations.
+The Arch job also syncs crossdock's own repo with real pacman.
 
 ## License
 

@@ -1,0 +1,9 @@
+# crossdock's state. The published tree is world-readable (it holds public
+# packages and signatures), so the server can read it under any account.
+# The incoming directories are setgid crossdock and group-writable: add
+# uploaders with `usermod -aG crossdock <user>`.
+d /var/lib/crossdock                0755 crossdock crossdock -
+d /var/lib/crossdock/repo           0755 crossdock crossdock -
+d /var/lib/crossdock/incoming       2775 crossdock crossdock -
+d /var/lib/crossdock/incoming/deb   2775 crossdock crossdock -
+d /var/lib/crossdock/incoming/arch  2775 crossdock crossdock -
