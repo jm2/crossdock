@@ -130,7 +130,7 @@ func TestPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	x86 := filepath.Join(out, "current", "arch", "jm2", "x86_64")
+	x86 := filepath.Join(publish.CurrentDir(out), "arch", "jm2", "x86_64")
 	db := readTarGz(t, filepath.Join(x86, "jm2.db"))
 	d := db["tributary-bin-1.2.3-1/desc"]
 	for _, want := range []string{
@@ -153,7 +153,7 @@ func TestPublish(t *testing.T) {
 	if got := files["tributary-bin-1.2.3-1/files"]; got != "%FILES%\nusr/\nusr/bin/\nusr/bin/tributary\n\n" {
 		t.Errorf("files entry = %q", got)
 	}
-	arm := readTarGz(t, filepath.Join(out, "current", "arch", "jm2", "aarch64", "jm2.db"))
+	arm := readTarGz(t, filepath.Join(publish.CurrentDir(out), "arch", "jm2", "aarch64", "jm2.db"))
 	if _, ok := arm["tributary-bin-1.2.3-1/desc"]; ok {
 		t.Error("aarch64 db contains an x86_64 package")
 	}

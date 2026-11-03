@@ -75,14 +75,14 @@ EOF
 
 %post
 %tmpfiles_create crossdock.conf
-%systemd_post crossdock-serve.service crossdock-publish.service crossdock-publish.path
+%systemd_post crossdock-serve.service crossdock-publish.service crossdock-publish.path crossdock-publish.timer
 
 %preun
-%systemd_preun crossdock-serve.service crossdock-publish.service crossdock-publish.path
+%systemd_preun crossdock-serve.service crossdock-publish.service crossdock-publish.path crossdock-publish.timer
 
 %postun
 %systemd_postun_with_restart crossdock-serve.service
-%systemd_postun crossdock-publish.service crossdock-publish.path
+%systemd_postun crossdock-publish.service crossdock-publish.path crossdock-publish.timer
 
 %files
 %license LICENSE
@@ -91,6 +91,7 @@ EOF
 %{_unitdir}/crossdock-serve.service
 %{_unitdir}/crossdock-publish.service
 %{_unitdir}/crossdock-publish.path
+%{_unitdir}/crossdock-publish.timer
 %{_sysusersdir}/crossdock.conf
 %{_tmpfilesdir}/crossdock.conf
 %dir %{_prefix}/lib/firewalld

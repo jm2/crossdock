@@ -6,7 +6,7 @@
 #
 #   <prefix>/bin/crossdock
 #   <prefix>/lib/systemd/system/crossdock-serve.service
-#   <prefix>/lib/systemd/system/crossdock-publish.service, crossdock-publish.path
+#   <prefix>/lib/systemd/system/crossdock-publish.{service,path,timer}
 #   <prefix>/lib/sysusers.d/crossdock.conf
 #   <prefix>/lib/tmpfiles.d/crossdock.conf
 #   <prefix>/lib/firewalld/services/crossdock.xml
@@ -30,7 +30,7 @@ units="$root/build-aux/systemd"
 
 install -Dm755 "$bindir/crossdock" "$dest$prefix/bin/crossdock"
 
-for unit in crossdock-serve.service crossdock-publish.service crossdock-publish.path; do
+for unit in crossdock-serve.service crossdock-publish.service crossdock-publish.path crossdock-publish.timer; do
   out="$dest$prefix/lib/systemd/system/$unit"
   mkdir -p "$(dirname "$out")"
   sed "s|@CROSSDOCK@|$prefix/bin/crossdock|" "$units/$unit" > "$out"

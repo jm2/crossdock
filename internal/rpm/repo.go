@@ -45,7 +45,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 	byFile := map[string]*entry{}
 	var entries []*entry
 	for _, f := range files {
-		pkg, err := ReadPackage(f)
+		pkg, err := publish.Cached(env.Release, f, "rpm/1", ReadPackage)
 		if err != nil {
 			return err
 		}
@@ -57,7 +57,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 		if err != nil {
 			return err
 		}
-		d, err := publish.HashFile(f)
+		d, err := env.Release.Digest(f)
 		if err != nil {
 			return err
 		}

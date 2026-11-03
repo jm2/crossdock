@@ -19,7 +19,7 @@
 set -euo pipefail
 
 work=$(mktemp -d)
-units=(crossdock-serve.service crossdock-publish.service crossdock-publish.path)
+units=(crossdock-serve.service crossdock-publish.service crossdock-publish.path crossdock-publish.timer)
 
 fail() {
   echo "::error title=system service smoke::$*"

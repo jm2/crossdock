@@ -28,7 +28,8 @@ func WriteNginx(w io.Writer, o NginxOptions) error {
 	if o.ServerName == "" {
 		o.ServerName = "_"
 	}
-	cur := filepath.Join(o.Output, "current")
+	// nginx wants forward slashes, whatever platform generated the config.
+	cur := filepath.ToSlash(filepath.Join(o.Output, "current"))
 	var b strings.Builder
 	p := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
 

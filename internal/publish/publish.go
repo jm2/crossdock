@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,9 +29,19 @@ import (
 
 const (
 	currentLink = "current"
+	// currentFile records the current release where symlinks aren't
+	// available (Windows without Developer Mode); see Commit.
+	currentFile = "current.id"
 	releasesDir = "releases"
 	storeDir    = "store"
+	// metaDir holds crossdock's bookkeeping inside a release. serve and the
+	// generated nginx config never expose dot paths.
+	metaDir      = ".crossdock"
+	manifestName = "store-objects"
 )
+
+// symlink is os.Symlink, swappable so tests can force the fallbacks.
+var symlink = os.Symlink
 
 // Digest describes a file's size and hashes.
 type Digest struct {
@@ -81,6 +92,25 @@ type Release struct {
 	ID   string
 	Dir  string // absolute path of the release directory
 	done bool
+	// prev is the release that was current when this one began, or "".
+	prev string
+	// objects are the store digests this release links to.
+	objects map[string]bool
+	cache   *cache
+	// noSymlinks makes the release copy instead of linking (see NoSymlinks).
+	noSymlinks bool
+}
+
+// NoSymlinks makes this release use no symlinks at all: in-release links
+// become hardlinks or copies, and current is recorded in current.id. Use it
+// for hosts or file systems that can't make or follow symlinks.
+func (r *Release) NoSymlinks() { r.noSymlinks = true }
+
+func (r *Release) symlink(target, path string) error {
+	if r.noSymlinks {
+		return errors.New("symlinks disabled")
+	}
+	return symlink(target, path)
 }
 
 // Begin creates a new, empty release directory under root.
@@ -99,7 +129,53 @@ func Begin(root string, now time.Time) (*Release, error) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Release{root: root, ID: id, Dir: dir}, nil
+	return &Release{
+		root: root, ID: id, Dir: dir, prev: Current(root),
+		objects: map[string]bool{}, cache: loadCache(root),
+	}, nil
+}
+
+// Previous returns the absolute path of rel in the release that was current
+// when this one began, and whether that release exists.
+func (r *Release) Previous(rel string) (string, bool) {
+	if r.prev == "" {
+		return "", false
+	}
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.Join(r.root, releasesDir, r.prev, clean), true
+}
+
+// LinkPrevious hardlinks (or copies) a file from the previous release into
+// the same path in this one. A missing source is not an error; it reports
+// whether the file was carried over.
+func (r *Release) LinkPrevious(rel string) (bool, error) {
+	src, ok := r.Previous(rel)
+	if !ok {
+		return false, nil
+	}
+	fi, err := os.Stat(src)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false, nil
+	}
+	dst, err := r.Path(rel)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.Link(src, dst); err != nil {
+		if err := copyFile(src, dst); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // Path returns the absolute path of rel inside the release, rejecting
@@ -127,8 +203,10 @@ func (r *Release) WriteFile(rel string, data []byte) (Digest, error) {
 	return HashBytes(data), nil
 }
 
-// Symlink creates a relative symlink at rel pointing to target (a sibling
-// name or relative path).
+// Symlink creates a relative symlink at rel pointing to target (a path
+// relative to rel's directory). Where symlinks can't be created, it
+// hardlinks or copies the target instead, so clients see the same content.
+// Call it after the target exists.
 func (r *Release) Symlink(target, rel string) error {
 	p, err := r.Path(rel)
 	if err != nil {
@@ -137,7 +215,35 @@ func (r *Release) Symlink(target, rel string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	return os.Symlink(target, p)
+	if err := r.symlink(target, p); err == nil {
+		return nil
+	}
+	src := filepath.Join(filepath.Dir(p), filepath.FromSlash(target))
+	if rel, err := filepath.Rel(r.Dir, src); err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("symlink target %q escapes release", target)
+	}
+	return copyTree(src, p)
+}
+
+// copyTree hardlinks (or copies) a file or directory tree.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		out := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(out, 0o755)
+		}
+		if err := os.Link(path, out); err != nil {
+			return copyFile(path, out)
+		}
+		return nil
+	})
 }
 
 // AddFile places a package payload at rel inside the release. The payload
@@ -153,6 +259,7 @@ func (r *Release) AddFile(src, rel string) (Digest, error) {
 	if err != nil {
 		return Digest{}, err
 	}
+	r.objects[d.SHA256] = true
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return Digest{}, err
 	}
@@ -171,6 +278,13 @@ func (r *Release) AddFile(src, rel string) (Digest, error) {
 }
 
 func (r *Release) store(src string) (Digest, string, error) {
+	// Unchanged since the last publish and already stored: no read at all.
+	if d, ok := r.cache.digest(src); ok {
+		obj := filepath.Join(r.root, storeDir, d.SHA256)
+		if fi, err := os.Stat(obj); err == nil && fi.Size() == d.Size {
+			return d, obj, nil
+		}
+	}
 	f, err := os.Open(src)
 	if err != nil {
 		return Digest{}, "", err
@@ -188,6 +302,7 @@ func (r *Release) store(src string) (Digest, string, error) {
 	if err != nil {
 		return Digest{}, "", err
 	}
+	r.cache.put(src, d)
 	obj := filepath.Join(r.root, storeDir, d.SHA256)
 	if _, err := os.Stat(obj); err == nil {
 		return d, obj, nil
@@ -227,31 +342,94 @@ func (r *Release) Abort() error {
 	return os.RemoveAll(r.Dir)
 }
 
-// Commit atomically points <root>/current at this release.
+// Commit records the release's store manifest and the metadata cache,
+// then atomically points <root>/current at this release. Where symlinks
+// can't be created, it atomically replaces <root>/current.id instead;
+// crossdock serve follows either, but static web servers need the symlink.
 func (r *Release) Commit() error {
 	if r.done {
 		return errors.New("release already finished")
 	}
-	tmp := filepath.Join(r.root, "."+currentLink+".tmp")
-	_ = os.Remove(tmp)
-	if err := os.Symlink(filepath.Join(releasesDir, r.ID), tmp); err != nil {
+	if err := r.writeManifest(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, filepath.Join(r.root, currentLink)); err != nil {
-		_ = os.Remove(tmp)
+	if err := r.cache.save(r.root); err != nil {
 		return err
+	}
+	tmp := filepath.Join(r.root, "."+currentLink+".tmp")
+	_ = os.Remove(tmp)
+	if err := r.symlink(filepath.Join(releasesDir, r.ID), tmp); err == nil {
+		if err := os.Rename(tmp, filepath.Join(r.root, currentLink)); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		_ = os.Remove(filepath.Join(r.root, currentFile))
+	} else {
+		if err := writeAtomic(filepath.Join(r.root, currentFile), []byte(r.ID+"\n")); err != nil {
+			return err
+		}
+		// A stale symlink would otherwise win over current.id.
+		if fi, err := os.Lstat(filepath.Join(r.root, currentLink)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			_ = os.Remove(filepath.Join(r.root, currentLink))
+		}
 	}
 	r.done = true
 	return nil
 }
 
-// Current returns the ID of the release <root>/current points to, or "".
-func Current(root string) string {
-	t, err := os.Readlink(filepath.Join(root, currentLink))
+// writeAtomic replaces path with data via a temp file and rename.
+func writeAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
-		return ""
+		return err
 	}
-	return filepath.Base(t)
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+func (r *Release) writeManifest() error {
+	ids := make([]string, 0, len(r.objects))
+	for id := range r.objects {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	dir := filepath.Join(r.Dir, metaDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, manifestName), []byte(strings.Join(ids, "\n")+"\n"), 0o644)
+}
+
+// CurrentDir returns the current release's directory, or "".
+func CurrentDir(root string) string {
+	if id := Current(root); id != "" {
+		return filepath.Join(root, releasesDir, id)
+	}
+	return ""
+}
+
+// Current returns the ID of the current release, or "".
+func Current(root string) string {
+	if t, err := os.Readlink(filepath.Join(root, currentLink)); err == nil {
+		return filepath.Base(t)
+	}
+	if b, err := os.ReadFile(filepath.Join(root, currentFile)); err == nil {
+		id := strings.TrimSpace(string(b))
+		if id != "" && id == filepath.Base(id) && !strings.HasPrefix(id, ".") {
+			return id
+		}
+	}
+	return ""
 }
 
 // Prune removes all but the newest keep releases (never the current one),
@@ -286,22 +464,51 @@ func Prune(root string, keep int) ([]string, error) {
 	return removed, gcStore(root)
 }
 
+// gcStore deletes store objects that no remaining release's manifest
+// lists. Releases from before manifests existed keep everything that's
+// still hardlinked somewhere. Deleting an object never breaks a release:
+// releases hold their own hardlinks or copies, so the store only saves
+// space and copying.
 func gcStore(root string) error {
+	releases, err := os.ReadDir(filepath.Join(root, releasesDir))
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	legacy := false
+	for _, rel := range releases {
+		if !rel.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(root, releasesDir, rel.Name(), metaDir, manifestName))
+		if os.IsNotExist(err) {
+			legacy = true
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, id := range strings.Fields(string(b)) {
+			keep[id] = true
+		}
+	}
 	dir := filepath.Join(root, storeDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		p := filepath.Join(dir, e.Name())
-		if strings.HasPrefix(e.Name(), ".incoming-") {
+		if strings.HasPrefix(e.Name(), ".") || keep[e.Name()] {
 			continue
 		}
-		n, ok := linkCount(p)
-		if ok && n <= 1 {
-			if err := os.Remove(p); err != nil {
-				return err
+		p := filepath.Join(dir, e.Name())
+		if legacy {
+			if n, ok := linkCount(p); !ok || n > 1 {
+				continue
 			}
+		}
+		if err := os.Remove(p); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -43,6 +43,7 @@ commands:
   serve         serve the current release over HTTP (read-only)
   nginx-config  print an nginx server block matching serve's behaviour
   inspect       print the metadata crossdock reads from package files
+  keygen        create a signing key (Ed25519) for publish
   version       print the version
 `
 
@@ -63,6 +64,8 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "nginx-config":
 		err = cmdNginx(os.Args[2:])
+	case "keygen":
+		err = cmdKeygen(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("crossdock", version, runtime.GOOS+"/"+runtime.GOARCH, runtime.Version())
 	case "help", "-h", "--help":
@@ -114,6 +117,9 @@ func cmdPublish(args []string) error {
 		return err
 	}
 	env.Release = rel
+	if cfg.NoSymlinks {
+		rel.NoSymlinks()
+	}
 	if err := build(cfg, env); err != nil {
 		rel.Abort()
 		return err
@@ -312,4 +318,66 @@ func cmdNginx(args []string) error {
 		return err
 	}
 	return serve.WriteNginx(os.Stdout, serve.NginxOptions{Output: out, Listen: *listen, ServerName: *name, Index: *index})
+}
+
+func cmdKeygen(args []string) error {
+	fs := flag.NewFlagSet("keygen", flag.ExitOnError)
+	uid := fs.String("uid", "", `key user ID, e.g. "jm2 packages <packages@example.lan>" (required)`)
+	out := fs.String("out", "signing.asc", "where to write the armored secret key (mode 0600)")
+	pub := fs.String("pub", "", "also write the armored public key here")
+	passFile := fs.String("passphrase-file", "", "protect the key with the passphrase in this file (default: unprotected)")
+	force := fs.Bool("force", false, "overwrite existing files")
+	fs.Parse(args)
+	if *uid == "" {
+		return errors.New("keygen: -uid is required")
+	}
+	var pass string
+	if *passFile != "" {
+		b, err := os.ReadFile(*passFile)
+		if err != nil {
+			return err
+		}
+		pass = strings.TrimRight(string(b), "\r\n")
+	}
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if *force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	// Refuse to clobber before spending time generating.
+	for _, p := range []string{*out, *pub} {
+		if p == "" || *force {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			return fmt.Errorf("keygen: %s exists (use -force to overwrite)", p)
+		}
+	}
+	k, err := sign.Generate(*uid, pass)
+	if err != nil {
+		return err
+	}
+	write := func(p string, data []byte, mode os.FileMode) error {
+		f, err := os.OpenFile(p, flags, mode)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			return err
+		}
+		return f.Close()
+	}
+	if err := write(*out, k.Secret, 0o600); err != nil {
+		return err
+	}
+	if *pub != "" {
+		if err := write(*pub, k.Public, 0o644); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("fingerprint %s\nsecret key  %s\n", k.Fingerprint, *out)
+	if *pub != "" {
+		fmt.Printf("public key  %s\n", *pub)
+	}
+	return nil
 }

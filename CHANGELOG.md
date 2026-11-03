@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   four formats.
 - `serve` and `nginx-config` cache content-addressed `repodata/<sha256>-*.xml.gz` files as
   immutable and serve `.goo` as `application/gzip`.
+- **Incremental publishing** — `<output>/cache.json` remembers each package's digest and parsed
+  metadata (by path, size and mtime), so unchanged packages aren't reread, rehashed or copied.
+- **apt `Acquire-By-Hash`**, keeping the previous generation's indexes reachable through a swap,
+  and **`valid_for`** for `Valid-Until`, with a new (disabled) `crossdock-publish.timer` that
+  republishes daily.
+- **`no_symlinks`** — publish without symlinks (in-release links become hardlinks or copies;
+  `current.id` records the current release). It's used automatically where symlinks can't be
+  created, as on Windows without Developer Mode.
+- **`crossdock keygen`** creates an Ed25519 signing key, optionally passphrase-protected, and
+  `signing.passphrase_file` reads a passphrase from a file such as a systemd credential.
+
+### Changed
+
+- The store is garbage-collected from per-release manifests rather than hardlink counts.
 
 ## [0.1.0] — 2026-11-03
 

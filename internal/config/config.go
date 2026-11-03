@@ -14,6 +14,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // Format identifies a repository format.
@@ -35,6 +38,12 @@ type Config struct {
 	KeepReleases int `json:"keep_releases"`
 	// Signing configures the OpenPGP key. Nil means unsigned.
 	Signing *Signing `json:"signing,omitempty"`
+	// NoSymlinks publishes without symlinks: in-release links become
+	// hardlinks or copies, and the current release is recorded in
+	// <output>/current.id instead of the current symlink. crossdock serve
+	// follows either; static web servers need symlinks. Windows without
+	// symlink privileges falls back to this automatically.
+	NoSymlinks bool `json:"no_symlinks,omitempty"`
 	// Serve configures `crossdock serve`.
 	Serve Serve  `json:"serve,omitempty"`
 	Repos []Repo `json:"repos"`
@@ -86,10 +95,39 @@ type Repo struct {
 	Origin      string `json:"origin,omitempty"`
 	Label       string `json:"label,omitempty"`
 	Description string `json:"description,omitempty"`
+	// ValidFor adds Valid-Until to Release (e.g. "7d", "36h"), so clients
+	// refuse a stale or replayed index. Publish more often than this;
+	// crossdock-publish.timer republishes daily.
+	ValidFor string `json:"valid_for,omitempty"`
 
 	// arch
 	// SignPackages creates detached .sig files for packages that lack one.
 	SignPackages bool `json:"sign_packages,omitempty"`
+}
+
+// ValidDuration parses ValidFor: a Go duration, or a number of days with
+// a "d" suffix. Zero means no Valid-Until.
+func (r Repo) ValidDuration() (time.Duration, error) {
+	if r.ValidFor == "" {
+		return 0, nil
+	}
+	var d time.Duration
+	if n, ok := strings.CutSuffix(r.ValidFor, "d"); ok {
+		days, err := strconv.Atoi(n)
+		if err != nil {
+			return 0, fmt.Errorf("valid_for %q: %w", r.ValidFor, err)
+		}
+		d = time.Duration(days) * 24 * time.Hour
+	} else {
+		var err error
+		if d, err = time.ParseDuration(r.ValidFor); err != nil {
+			return 0, fmt.Errorf("valid_for %q: %w", r.ValidFor, err)
+		}
+	}
+	if d < time.Hour {
+		return 0, fmt.Errorf("valid_for %q: must be at least 1h", r.ValidFor)
+	}
+	return d, nil
 }
 
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
@@ -210,6 +248,12 @@ func (c *Config) Validate() error {
 			if !nameRE.MatchString(a) {
 				return fmt.Errorf("repos[%d] %s: invalid architecture %q", i, r.Name, a)
 			}
+		}
+		if _, err := r.ValidDuration(); err != nil {
+			return fmt.Errorf("repos[%d] %s: %w", i, r.Name, err)
+		}
+		if r.ValidFor != "" && r.Format != FormatDeb {
+			return fmt.Errorf("repos[%d] %s: valid_for only applies to deb repos", i, r.Name)
 		}
 		if r.Format == FormatDeb {
 			for _, f := range []string{r.Suite, r.Codename, r.Component} {

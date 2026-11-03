@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadExample(t *testing.T) {
@@ -27,6 +28,9 @@ func TestLoadErrors(t *testing.T) {
 		"duplicate":     `{"output":"o","repos":[{"name":"a","format":"deb","source":"s"},{"name":"a","format":"deb","source":"t"}]}`,
 		"two keys":      `{"output":"o","signing":{"key_file":"k","gnupg_home":"h","key_id":"x"},"repos":[{"name":"a","format":"deb","source":"s"}]}`,
 		"bad suite":     `{"output":"o","repos":[{"name":"a","format":"deb","source":"s","suite":"../x"}]}`,
+		"bad valid_for": `{"output":"o","repos":[{"name":"a","format":"deb","source":"s","valid_for":"soon"}]}`,
+		"short valid":   `{"output":"o","repos":[{"name":"a","format":"deb","source":"s","valid_for":"5m"}]}`,
+		"valid on rpm":  `{"output":"o","repos":[{"name":"a","format":"rpm","source":"s","valid_for":"7d"}]}`,
 	} {
 		p := filepath.Join(t.TempDir(), "c.json")
 		os.WriteFile(p, []byte(body), 0o644)
@@ -50,20 +54,30 @@ func TestRelativePaths(t *testing.T) {
 }
 
 func TestEnvExpansionAndServeDefaults(t *testing.T) {
-	t.Setenv("CREDENTIALS_DIRECTORY", "/run/credentials/crossdock-publish.service")
+	creds := filepath.ToSlash(t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", creds)
 	p := filepath.Join(t.TempDir(), "c.json")
-	os.WriteFile(p, []byte(`{"output":"/var/lib/crossdock/repo",
+	os.WriteFile(p, []byte(`{"output":"out",
 		"signing":{"key_file":"${CREDENTIALS_DIRECTORY}/signing.asc","passphrase_file":"$CREDENTIALS_DIRECTORY/passphrase"},
-		"repos":[{"name":"a","format":"deb","source":"/in"}]}`), 0o644)
+		"repos":[{"name":"a","format":"deb","source":"in"}]}`), 0o644)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Signing.KeyFile != "/run/credentials/crossdock-publish.service/signing.asc" ||
-		c.Signing.PassphraseFile != "/run/credentials/crossdock-publish.service/passphrase" {
+	if filepath.Clean(c.Signing.KeyFile) != filepath.Clean(creds+"/signing.asc") ||
+		filepath.Clean(c.Signing.PassphraseFile) != filepath.Clean(creds+"/passphrase") {
 		t.Errorf("not expanded: %+v", c.Signing)
 	}
 	if c.Serve.Listen != ":8080" {
 		t.Errorf("serve.listen default = %q", c.Serve.Listen)
+	}
+}
+
+func TestValidDuration(t *testing.T) {
+	for in, want := range map[string]time.Duration{"": 0, "7d": 7 * 24 * time.Hour, "36h": 36 * time.Hour} {
+		got, err := Repo{ValidFor: in}.ValidDuration()
+		if err != nil || got != want {
+			t.Errorf("ValidDuration(%q) = %v, %v", in, got, err)
+		}
 	}
 }

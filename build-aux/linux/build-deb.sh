@@ -105,6 +105,7 @@ if [ "$1" = configure ] || [ "$1" = abort-upgrade ] || [ "$1" = abort-deconfigur
 	if command -v deb-systemd-helper >/dev/null; then
 		deb-systemd-helper update-state crossdock-serve.service >/dev/null || true
 		deb-systemd-helper update-state crossdock-publish.path >/dev/null || true
+		deb-systemd-helper update-state crossdock-publish.timer >/dev/null || true
 	fi
 	if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
 		systemctl --system daemon-reload >/dev/null || true
@@ -123,11 +124,12 @@ set -e
 # published repos and incoming packages) are kept.
 if [ "$1" = remove ]; then
 	if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
-		deb-systemd-invoke stop crossdock-publish.path crossdock-publish.service crossdock-serve.service >/dev/null || true
+		deb-systemd-invoke stop crossdock-publish.timer crossdock-publish.path crossdock-publish.service crossdock-serve.service >/dev/null || true
 	fi
 	if command -v deb-systemd-helper >/dev/null; then
 		deb-systemd-helper disable crossdock-serve.service >/dev/null || true
 		deb-systemd-helper disable crossdock-publish.path >/dev/null || true
+		deb-systemd-helper disable crossdock-publish.timer >/dev/null || true
 	fi
 fi
 exit 0

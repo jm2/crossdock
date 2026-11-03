@@ -79,8 +79,11 @@ func fixture(t *testing.T) (string, *publish.Release) {
 	rel.WriteFile("arch/jm2/x86_64/jm2.db.tar.gz", []byte("db"))
 	rel.Symlink("jm2.db.tar.gz", "arch/jm2/x86_64/jm2.db")
 	rel.WriteFile(".secret", []byte("no"))
-	// A symlink pointing outside the release must never be followed.
-	os.Symlink("/etc/passwd", filepath.Join(rel.Dir, "escape"))
+	// A symlink pointing outside the release must never be followed (where
+	// the platform lets us make one).
+	outside := filepath.Join(t.TempDir(), "outside")
+	os.WriteFile(outside, []byte("secret"), 0o644)
+	os.Symlink(outside, filepath.Join(rel.Dir, "escape"))
 	if err := rel.Commit(); err != nil {
 		t.Fatal(err)
 	}

@@ -185,3 +185,48 @@ func (g *GPG) Close() error {
 	}
 	return nil
 }
+
+// GeneratedKey is a new signing key.
+type GeneratedKey struct {
+	Fingerprint string
+	Secret      []byte // armored secret key
+	Public      []byte // armored public key
+}
+
+// Generate creates an Ed25519 signing key for uid ("Name <email>") in a
+// throwaway GnuPG home, protected with passphrase if it isn't empty.
+func Generate(uid, passphrase string) (*GeneratedKey, error) {
+	path, err := exec.LookPath("gpg")
+	if err != nil {
+		return nil, fmt.Errorf("keygen needs the gpg binary: %w", err)
+	}
+	dir, err := os.MkdirTemp("", "crossdock-keygen-")
+	if err != nil {
+		return nil, err
+	}
+	g := &GPG{gpg: path, home: dir, tempHome: true, passphrase: passphrase}
+	defer g.Close()
+	// --quick-gen-key with an empty --passphrase makes an unprotected key.
+	args := []string{"--quick-gen-key", uid, "ed25519", "sign", "never"}
+	if passphrase == "" {
+		args = append([]string{"--pinentry-mode", "loopback", "--passphrase", ""}, args...)
+	}
+	if _, err := g.run(nil, args...); err != nil {
+		return nil, err
+	}
+	if err := g.resolveKey(); err != nil {
+		return nil, err
+	}
+	k := &GeneratedKey{Fingerprint: g.fpr}
+	if k.Public, err = g.PublicKey(true); err != nil {
+		return nil, err
+	}
+	exportArgs := []string{"--armor", "--export-secret-keys", g.fpr}
+	if passphrase == "" {
+		exportArgs = append([]string{"--pinentry-mode", "loopback", "--passphrase", ""}, exportArgs...)
+	}
+	if k.Secret, err = g.run(nil, exportArgs...); err != nil {
+		return nil, err
+	}
+	return k, nil
+}

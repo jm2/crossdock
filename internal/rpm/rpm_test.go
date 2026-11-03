@@ -90,7 +90,7 @@ func publishTestdata(t *testing.T) (string, string) {
 	if err := rel.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(out, "current", "rpm", "jm2"), src
+	return filepath.Join(publish.CurrentDir(out), "rpm", "jm2"), src
 }
 
 // TestSignedPackages parses the EdDSA-, RSA- and v6-signed copies.

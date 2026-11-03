@@ -40,11 +40,11 @@ Nothing is enabled at install.
 ```sh
 # 1. A signing key. Keep it root-only; systemd hands it to the publisher
 #    as a credential, so the crossdock account itself can't read it.
-gpg --batch --passphrase '' --quick-gen-key "My repo <repo@example.lan>" ed25519 sign never
-gpg --armor --export-secret-keys "repo@example.lan" | sudo install -m 0600 /dev/stdin /etc/crossdock/signing.asc
+sudo crossdock keygen -uid "My repo <repo@example.lan>" -out /etc/crossdock/signing.asc
 
 # 2. Start serving and auto-publishing, then publish once.
 sudo systemctl enable --now crossdock-serve crossdock-publish.path
+sudo systemctl enable --now crossdock-publish.timer   # only if a deb repo sets valid_for
 sudo systemctl start crossdock-publish
 sudo firewall-cmd --permanent --add-service=crossdock && sudo firewall-cmd --reload   # Fedora
 
@@ -93,6 +93,23 @@ and prunes old releases (`keep_releases`, default 3). If a publish fails,
 the previous release stays live. Package payloads are deduplicated in
 `<output>/store` and hardlinked into releases. Paths in the config can
 use environment variables, e.g. `${CREDENTIALS_DIRECTORY}/signing.asc`.
+
+Publishing is incremental. `<output>/cache.json` remembers each package's
+digest and parsed metadata by path, size and mtime, so an unchanged
+package isn't reread, rehashed or copied. Republishing a 400 MiB package
+takes milliseconds.
+
+Config options worth knowing:
+
+| Option | Effect |
+|---|---|
+| `"no_symlinks": true` | In-release links become hardlinks or copies, and the current release goes in `<output>/current.id`. Use it for SMB shares, object-store syncs, or anything that won't follow links. `crossdock serve` handles either; static web servers need symlinks. Windows without symlink rights falls back to this automatically. |
+| `"valid_for": "7d"` (deb repos) | Adds `Valid-Until` to `Release`, so clients reject stale or replayed indexes. Enable `crossdock-publish.timer` so the repo is republished before it expires. |
+| `"passphrase_file"` (signing) | Reads the key's passphrase from a file, e.g. a systemd credential. |
+
+apt repos always set `Acquire-By-Hash: yes` and keep the previous
+generation's indexes under `by-hash/`, so a client that read the old
+`InRelease` just before a swap still gets matching indexes.
 
 ## Serving
 
@@ -186,14 +203,16 @@ For pacman, add it with `pacman-key --add` and `--lsign-key`.
 | RPM | `rpm/<repo>/repodata/`, `rpm/<repo>/Packages/<l>/…` |
 | GooGet | `goo/<repo>/index{,.gz}`, `goo/<repo>/packages/<name>.<arch>.<ver>.goo` |
 
-## Requirements (M1)
+## Requirements
 
-- `gpg` for signing (any key gpg can use, including smartcards via
-  `gnupg_home` + `key_id`).
+- `gpg` for signing and `crossdock keygen` (any key gpg can use, including
+  smartcards via `gnupg_home` + `key_id`).
 - `xz` and `zstd` binaries for reading xz- or zstd-compressed packages.
   That covers every `.pkg.tar.zst`, and Ubuntu's `dpkg-deb` default.
 
-The packages depend on all three. Both requirements go away in M2.
+The packages depend on all three. Native Go signing and decompression
+(which would drop these) need third-party modules; see
+[PLAN.md](PLAN.md).
 
 ## Development
 

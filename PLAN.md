@@ -135,16 +135,28 @@ func Publish(repo config.Repo, env *publish.Env) error
    DynamicUser on :8080, `crossdock-publish.service` + `.path`),
    sysusers.d/tmpfiles.d, and a firewalld service. The release workflow
    mirrors jm2/switchworks.
-2. **M2: hardening + go native.** Swap in `ProtonMail/go-crypto` (native
-   signing, while keeping the gpg backend for smartcards), `klauspost/compress/zstd`,
-   `ulikunitz/xz`, and YAML config, which drops the gpg/xz/zstd package
-   dependencies. Windows: publish without symlink privileges (copy
-   fallback for `current` and in-release links), then add Windows to the
-   CI test matrix. Metadata cache keyed by sha256, so large repos don't
-   re-read every package; `Acquire-By-Hash` for apt; `Valid-Until` as an
-   option; validating pacman db output against real `pacman`; a systemd
-   path unit and an nginx example; release tooling (GoReleaser, with
-   crossdock packaging itself).
+2. **M2: hardening.** Done:
+   - Incremental publishing: `<output>/cache.json` keeps digests and
+     parsed metadata by path+size+mtime, and unchanged packages are
+     hardlinked from the store without being reread.
+   - Store GC from per-release manifests (`.crossdock/store-objects`)
+     instead of hardlink counts, so it works on every platform.
+   - apt `Acquire-By-Hash` with one generation carried over, and
+     `valid_for` (`Valid-Until`) with `crossdock-publish.timer`.
+   - Symlink-free publishing (`no_symlinks`, automatic on Windows), with
+     `current.id` and copies or hardlinks for in-release links. The whole
+     suite, real apt included, passes with symlinks forced off.
+   - `crossdock keygen`.
+
+   Still open: the **go-native swap**. Replace `gpg` with
+   `ProtonMail/go-crypto` (keeping gpg for smartcards), `xz`/`zstd` with
+   `ulikunitz/xz` and `klauspost/compress/zstd` (a release that supports
+   Go 1.24, or bump go.mod), and JSON with YAML (`github.com/goccy/go-yaml`).
+   The sandbox that built M1–M4 can't add modules: `sum.golang.org` and
+   `gopkg.in` are unreachable, and skipping checksum verification was
+   refused. Run `go get` + `go mod tidy` somewhere with normal access and
+   commit `go.mod`/`go.sum` (or `go mod vendor`), then the code changes are
+   mechanical. The Windows CI job also needs a first green run.
 3. **M3: RPM** (done, except header signing). A stdlib RPM header parser
    and `primary`/`filelists`/`other.xml.gz` plus a signed `repomd.xml`,
    following createrepo_c's rules: primary files, `rpmlib()` and

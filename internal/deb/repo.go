@@ -6,6 +6,7 @@ package deb
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -37,7 +38,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 	var entries []*entry
 	concrete := map[string]bool{}
 	for _, f := range files {
-		pkg, err := ReadPackage(f)
+		pkg, err := publish.Cached(env.Release, f, "deb/1", ReadPackage)
 		if err != nil {
 			return err
 		}
@@ -120,35 +121,48 @@ func Publish(repo config.Repo, env *publish.Env) error {
 				return err
 			}
 			indexes = append(indexes, indexFile{v.name, d})
+			// Acquire-By-Hash: the same bytes under their SHA-256, so a client
+			// that read the previous InRelease still finds its indexes.
+			if _, err := env.Release.WriteFile(path.Join(dist, byHash(v.name, d.SHA256)), v.data); err != nil {
+				return err
+			}
 		}
 		env.Logf("deb/%s: %s/binary-%s: %d packages", repo.Name, repo.Component, a, n)
 	}
 
-	release := releaseFile(repo, archs, indexes, env)
+	if err := carryByHash(env.Release, dist); err != nil {
+		return err
+	}
+	release, err := releaseFile(repo, archs, indexes, env)
+	if err != nil {
+		return err
+	}
 	if _, err := env.Release.WriteFile(path.Join(dist, "Release"), release); err != nil {
 		return err
 	}
+	if env.Signer != nil {
+		sig, err := env.Signer.DetachSign(release, true)
+		if err != nil {
+			return err
+		}
+		if _, err := env.Release.WriteFile(path.Join(dist, "Release.gpg"), sig); err != nil {
+			return err
+		}
+		inrel, err := env.Signer.ClearSign(release)
+		if err != nil {
+			return err
+		}
+		if _, err := env.Release.WriteFile(path.Join(dist, "InRelease"), inrel); err != nil {
+			return err
+		}
+	}
+	// Last, so that where symlinks fall back to copies the copy is complete.
 	if repo.Suite != repo.Codename {
 		if err := env.Release.Symlink(repo.Codename, path.Join(root, "dists", repo.Suite)); err != nil {
 			return err
 		}
 	}
-	if env.Signer == nil {
-		return nil
-	}
-	sig, err := env.Signer.DetachSign(release, true)
-	if err != nil {
-		return err
-	}
-	if _, err := env.Release.WriteFile(path.Join(dist, "Release.gpg"), sig); err != nil {
-		return err
-	}
-	inrel, err := env.Signer.ClearSign(release)
-	if err != nil {
-		return err
-	}
-	_, err = env.Release.WriteFile(path.Join(dist, "InRelease"), inrel)
-	return err
+	return nil
 }
 
 func stanza(e *entry) Paragraph {
@@ -174,7 +188,40 @@ type indexFile struct {
 	digest publish.Digest
 }
 
-func releaseFile(repo config.Repo, archs []string, files []indexFile, env *publish.Env) []byte {
+// byHash is an index file's Acquire-By-Hash path.
+func byHash(name, sha256 string) string {
+	return path.Join(path.Dir(name), "by-hash", "SHA256", sha256)
+}
+
+// carryByHash keeps the previous release's indexes reachable by hash for
+// one more generation: a client that fetched the old InRelease just before
+// the swap can still download what it lists.
+func carryByHash(rel *publish.Release, dist string) error {
+	prev, ok := rel.Previous(path.Join(dist, "Release"))
+	if !ok {
+		return nil
+	}
+	b, err := os.ReadFile(prev)
+	if err != nil {
+		return nil // the previous release had no such suite
+	}
+	p, err := ParseParagraph(b)
+	if err != nil {
+		return nil
+	}
+	for _, line := range strings.Split(p.Get("SHA256"), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 || strings.Contains(f[2], "by-hash") {
+			continue
+		}
+		if _, err := rel.LinkPrevious(path.Join(dist, byHash(f[2], f[0]))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func releaseFile(repo config.Repo, archs []string, files []indexFile, env *publish.Env) ([]byte, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 	p := Paragraph{
 		{Name: "Origin", Value: repo.Origin},
@@ -184,6 +231,14 @@ func releaseFile(repo config.Repo, archs []string, files []indexFile, env *publi
 		{Name: "Date", Value: env.Now.UTC().Format("Mon, 02 Jan 2006 15:04:05 UTC")},
 		{Name: "Architectures", Value: strings.Join(archs, " ")},
 		{Name: "Components", Value: repo.Component},
+		{Name: "Acquire-By-Hash", Value: "yes"},
+	}
+	valid, err := repo.ValidDuration()
+	if err != nil {
+		return nil, err
+	}
+	if valid > 0 {
+		p = append(p[:5], append(Paragraph{{Name: "Valid-Until", Value: env.Now.Add(valid).UTC().Format("Mon, 02 Jan 2006 15:04:05 UTC")}}, p[5:]...)...)
 	}
 	if repo.Description != "" {
 		p = append(p, Field{Name: "Description", Value: repo.Description})
@@ -205,5 +260,5 @@ func releaseFile(repo config.Repo, archs []string, files []indexFile, env *publi
 	}
 	var b bytes.Buffer
 	p.Write(&b)
-	return b.Bytes()
+	return b.Bytes(), nil
 }

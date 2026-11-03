@@ -1,0 +1,16 @@
+# Republishes daily even when nothing was uploaded. Enable it when a deb
+# repo sets "valid_for", so its Release never expires on clients:
+#
+#   sudo systemctl enable --now crossdock-publish.timer
+[Unit]
+Description=crossdock: daily republish (keeps Valid-Until fresh)
+Documentation=https://github.com/jm2/crossdock
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+Unit=crossdock-publish.service
+
+[Install]
+WantedBy=timers.target

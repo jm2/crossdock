@@ -38,11 +38,11 @@ func Publish(repo config.Repo, env *publish.Env) error {
 	var entries []*entry
 	concrete := map[string]bool{}
 	for _, f := range files {
-		pkg, err := ReadPackage(f)
+		pkg, err := publish.Cached(env.Release, f, "arch/1", ReadPackage)
 		if err != nil {
 			return err
 		}
-		d, err := publish.HashFile(f)
+		d, err := env.Release.Digest(f)
 		if err != nil {
 			return err
 		}

@@ -158,7 +158,7 @@ func TestPublishGoogetClientView(t *testing.T) {
 	if err := rel.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	cur := filepath.Join(out, "current")
+	cur := publish.CurrentDir(out)
 
 	// googet fetches <repo>/index.gz and decodes a JSON array of RepoSpec.
 	f, err := os.Open(filepath.Join(cur, "goo", "jm2", "index.gz"))

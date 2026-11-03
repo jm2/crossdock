@@ -4,7 +4,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -12,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jm2/crossdock/internal/publish"
 	"github.com/jm2/crossdock/internal/serve"
 )
 
@@ -102,7 +107,7 @@ func TestAptEndToEnd(t *testing.T) {
 	if err := cmdPublish([]string{"-q", "-c", cfgPath}); err != nil {
 		t.Fatal(err)
 	}
-	cur := filepath.Join(work, "out", "current")
+	cur := publish.CurrentDir(filepath.Join(work, "out"))
 	for _, f := range []string{"crossdock.asc", "deb/jm2/dists/crossdock/InRelease",
 		"deb/jm2/dists/stable/Release.gpg", "deb/jm2/dists/crossdock/main/binary-arm64/Packages.gz"} {
 		if _, err := os.Stat(filepath.Join(cur, f)); err != nil {
@@ -120,11 +125,59 @@ func TestAptEndToEnd(t *testing.T) {
 	aptInstall(t, work, httpOpts)
 	opts, apt := fileOpts, filepath.Join(work, "apt-file")
 
-	// Tampering with an index must be caught by apt's hash checks.
-	pk := filepath.Join(cur, "deb/jm2/dists/crossdock/main/binary-amd64/Packages")
+	// The same config with no_symlinks, through serve: apt must not notice.
+	cfg["no_symlinks"] = true
+	cfg["output"] = "out-nolinks"
+	b, _ = json.Marshal(cfg)
+	os.WriteFile(cfgPath, b, 0o644)
+	if err := cmdPublish([]string{"-q", "-c", cfgPath}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(work, "out-nolinks", "current")); !os.IsNotExist(err) {
+		t.Errorf("no_symlinks publish made a current symlink: %v", err)
+	}
+	srvNL := httptest.NewServer(&serve.Handler{Output: filepath.Join(work, "out-nolinks")})
+	defer srvNL.Close()
+	keyNL := filepath.Join(work, "nolinks.asc")
+	resp, err := http.Get(srvNL.URL + "/crossdock.asc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	os.WriteFile(keyNL, kb, 0o644)
+	// "stable" is a copy of the "crossdock" codename directory here.
+	aptInstall(t, work, aptRoot(t, filepath.Join(work, "apt-nolinks"), srvNL.URL+"/deb/jm2", keyNL))
+
+	// apt fetches indexes by hash (Acquire-By-Hash), and every by-hash
+	// file matches its name.
+	// Tamper under the suite name apt reads ("stable"): it's a symlink to
+	// the codename normally and a hardlinked copy with no_symlinks.
+	byHash, _ := filepath.Glob(filepath.Join(cur, "deb/jm2/dists/stable/main/binary-*/by-hash/SHA256/*"))
+	if len(byHash) != 4 {
+		t.Fatalf("by-hash files: %v", byHash)
+	}
+	for _, f := range byHash {
+		b, _ := os.ReadFile(f)
+		if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != filepath.Base(f) {
+			t.Errorf("%s does not match its hash", f)
+		}
+	}
+	rel, _ := os.ReadFile(filepath.Join(cur, "deb/jm2/dists/crossdock/Release"))
+	if !strings.Contains(string(rel), "Acquire-By-Hash: yes") {
+		t.Error("Release lacks Acquire-By-Hash")
+	}
+
+	// Tampering with an index must be caught by apt's hash checks, by-hash
+	// copies included.
+	pk := filepath.Join(cur, "deb/jm2/dists/stable/main/binary-amd64/Packages")
 	os.Remove(pk + ".gz")
 	os.Remove(pk)
 	os.WriteFile(pk, []byte("Package: evil\n"), 0o644)
+	for _, f := range byHash {
+		os.Remove(f)
+		os.WriteFile(f, []byte("Package: evil\n"), 0o644)
+	}
 	os.RemoveAll(filepath.Join(apt, "var/lib/apt/lists"))
 	os.MkdirAll(filepath.Join(apt, "var/lib/apt/lists/partial"), 0o755)
 	cmd := exec.Command("apt-get", append(opts, "update")...)
