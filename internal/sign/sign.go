@@ -3,9 +3,9 @@
 
 // Package sign produces the OpenPGP signatures each repo format needs.
 //
-// M1 drives the gpg binary, which also means hardware keys and gpg-agent
-// work for free. A native backend (ProtonMail/go-crypto) slots in behind the
-// same Signer interface in M2.
+// A key file (signing.key_file) is handled natively by ProtonMail/go-crypto,
+// with no gpg binary needed. An existing keyring (signing.gnupg_home) goes
+// through gpg instead, so gpg-agent and smartcard keys keep working.
 package sign
 
 import (
@@ -37,52 +37,52 @@ type Signer interface {
 	Close() error
 }
 
-// GPG is a Signer backed by the gpg binary.
+// New builds a Signer from config.
+func New(c *config.Signing) (Signer, error) {
+	pass, err := passphrase(c)
+	if err != nil {
+		return nil, err
+	}
+	if c.GnuPGHome != "" {
+		return newGPG(c.GnuPGHome, c.KeyID, pass)
+	}
+	return newNative(c.KeyFile, c.KeyID, pass)
+}
+
+func passphrase(c *config.Signing) (string, error) {
+	if c.PassphraseEnv != "" {
+		v, ok := os.LookupEnv(c.PassphraseEnv)
+		if !ok {
+			return "", fmt.Errorf("passphrase env %s is not set", c.PassphraseEnv)
+		}
+		return v, nil
+	}
+	if c.PassphraseFile != "" {
+		b, err := os.ReadFile(c.PassphraseFile)
+		if err != nil {
+			return "", fmt.Errorf("passphrase file: %w", err)
+		}
+		return strings.TrimRight(string(b), "\r\n"), nil
+	}
+	return "", nil
+}
+
+// GPG is a Signer backed by the gpg binary and an existing GnuPG home.
 type GPG struct {
 	gpg        string
 	home       string
-	tempHome   bool
 	keyID      string
 	fpr        string
 	passphrase string
 }
 
-// New builds a Signer from config.
-func New(c *config.Signing) (*GPG, error) {
+func newGPG(home, keyID, passphrase string) (*GPG, error) {
 	path, err := exec.LookPath("gpg")
 	if err != nil {
-		return nil, fmt.Errorf("signing needs the gpg binary until native signing lands (M2): %w", err)
+		return nil, fmt.Errorf("signing.gnupg_home needs the gpg binary (or use signing.key_file): %w", err)
 	}
-	g := &GPG{gpg: path, keyID: c.KeyID}
-	if c.PassphraseEnv != "" {
-		v, ok := os.LookupEnv(c.PassphraseEnv)
-		if !ok {
-			return nil, fmt.Errorf("passphrase env %s is not set", c.PassphraseEnv)
-		}
-		g.passphrase = v
-	}
-	if c.PassphraseFile != "" {
-		b, err := os.ReadFile(c.PassphraseFile)
-		if err != nil {
-			return nil, fmt.Errorf("passphrase file: %w", err)
-		}
-		g.passphrase = strings.TrimRight(string(b), "\r\n")
-	}
-	if c.GnuPGHome != "" {
-		g.home = c.GnuPGHome
-	} else {
-		dir, err := os.MkdirTemp("", "crossdock-gnupg-")
-		if err != nil {
-			return nil, err
-		}
-		g.home, g.tempHome = dir, true
-		if _, err := g.run(nil, "--import", c.KeyFile); err != nil {
-			g.Close()
-			return nil, fmt.Errorf("importing %s: %w", c.KeyFile, err)
-		}
-	}
+	g := &GPG{gpg: path, home: home, keyID: keyID, passphrase: passphrase}
 	if err := g.resolveKey(); err != nil {
-		g.Close()
 		return nil, err
 	}
 	return g, nil
@@ -177,56 +177,11 @@ func (g *GPG) PublicKey(armor bool) ([]byte, error) {
 
 func (g *GPG) Fingerprint() string { return g.fpr }
 
-func (g *GPG) Close() error {
-	if g.tempHome && g.home != "" {
-		// Stop any agent started for the throwaway home.
-		_ = exec.Command("gpgconf", "--homedir", g.home, "--kill", "all").Run()
-		return os.RemoveAll(g.home)
-	}
-	return nil
-}
+func (g *GPG) Close() error { return nil }
 
 // GeneratedKey is a new signing key.
 type GeneratedKey struct {
 	Fingerprint string
 	Secret      []byte // armored secret key
 	Public      []byte // armored public key
-}
-
-// Generate creates an Ed25519 signing key for uid ("Name <email>") in a
-// throwaway GnuPG home, protected with passphrase if it isn't empty.
-func Generate(uid, passphrase string) (*GeneratedKey, error) {
-	path, err := exec.LookPath("gpg")
-	if err != nil {
-		return nil, fmt.Errorf("keygen needs the gpg binary: %w", err)
-	}
-	dir, err := os.MkdirTemp("", "crossdock-keygen-")
-	if err != nil {
-		return nil, err
-	}
-	g := &GPG{gpg: path, home: dir, tempHome: true, passphrase: passphrase}
-	defer g.Close()
-	// --quick-gen-key with an empty --passphrase makes an unprotected key.
-	args := []string{"--quick-gen-key", uid, "ed25519", "sign", "never"}
-	if passphrase == "" {
-		args = append([]string{"--pinentry-mode", "loopback", "--passphrase", ""}, args...)
-	}
-	if _, err := g.run(nil, args...); err != nil {
-		return nil, err
-	}
-	if err := g.resolveKey(); err != nil {
-		return nil, err
-	}
-	k := &GeneratedKey{Fingerprint: g.fpr}
-	if k.Public, err = g.PublicKey(true); err != nil {
-		return nil, err
-	}
-	exportArgs := []string{"--armor", "--export-secret-keys", g.fpr}
-	if passphrase == "" {
-		exportArgs = append([]string{"--pinentry-mode", "loopback", "--passphrase", ""}, exportArgs...)
-	}
-	if k.Secret, err = g.run(nil, exportArgs...); err != nil {
-		return nil, err
-	}
-	return k, nil
 }

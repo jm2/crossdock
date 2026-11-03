@@ -21,6 +21,16 @@ binary, with no distro tooling (`reprepro`, `createrepo_c`, `repo-add`,
 - **Static output.** Any web server that can serve files and follow symlinks
   (nginx, Caddy, `python -m http.server`) is enough.
 
+## Supported targets
+
+Only current releases: Debian stable (13) and newer, Fedora 44 and 45,
+EL10.2 and newer, Arch, and Windows for GooGet. No compatibility code for
+older clients. Dependencies and the Go toolchain track the latest releases
+(`go 1.27.3`). The one deliberate exception is the key format.
+Signing keys stay v4 Ed25519 with SHA-512 signatures, because GnuPG
+(pacman, and gpgme in EL10's librepo) rejects RFC 9580 v6 keys; apt's sqv
+and rpm-sequoia would accept them.
+
 ## Non-goals
 
 - Building packages from source. Use `makepkg`, `dpkg-buildpackage` and
@@ -63,9 +73,8 @@ Server = https://repo.example/arch/$repo/$arch
 
 ## Configuration
 
-M1 reads `crossdock.json`. The schema below is shown as YAML, which takes
-over once third-party dependencies are pulled in (M2); the field names are
-the same.
+`crossdock.yaml` (goccy/go-yaml, with unknown and duplicate keys
+rejected). JSON configs still load, since JSON is valid YAML.
 
 ```yaml
 output: /srv/crossdock
@@ -147,16 +156,18 @@ func Publish(repo config.Repo, env *publish.Env) error
      `current.id` and copies or hardlinks for in-release links. The whole
      suite, real apt included, passes with symlinks forced off.
    - `crossdock keygen`.
-
-   Still open: the **go-native swap**. Replace `gpg` with
-   `ProtonMail/go-crypto` (keeping gpg for smartcards), `xz`/`zstd` with
-   `ulikunitz/xz` and `klauspost/compress/zstd` (a release that supports
-   Go 1.24, or bump go.mod), and JSON with YAML (`github.com/goccy/go-yaml`).
-   The sandbox that built M1–M4 can't add modules: `sum.golang.org` and
-   `gopkg.in` are unreachable, and skipping checksum verification was
-   refused. Run `go get` + `go mod tidy` somewhere with normal access and
-   commit `go.mod`/`go.sum` (or `go mod vendor`), then the code changes are
-   mechanical. The Windows CI job also needs a first green run.
+   - The **go-native swap**. `key_file` signing and `keygen` use
+     ProtonMail/go-crypto, which makes v4 Ed25519 keys and SHA-512
+     signatures. Clearsigned output is re-armored with a CRC-24 line,
+     because GnuPG 2.4 fails `InRelease` without one. gpg remains only
+     for `gnupg_home` (agent and smartcard keys). xz and zstd decoding use
+     ulikunitz/xz and klauspost/compress/zstd, and the config is YAML
+     (goccy/go-yaml). The packages no longer depend on gnupg, xz or zstd.
+   - Client CI on every target: apt on Debian stable (sqv) and Ubuntu
+     (gpgv), dnf on Fedora 44/45 and AlmaLinux 10, and pacman on Arch.
+     Each one rejects a tampered index.
+   - Windows always publishes without symlinks. It can't rename a symlink
+     over `current`, even when it can create symlinks.
 3. **M3: RPM** (done, except header signing). A stdlib RPM header parser
    and `primary`/`filelists`/`other.xml.gz` plus a signed `repomd.xml`,
    following createrepo_c's rules: primary files, `rpmlib()` and
@@ -166,7 +177,10 @@ func Publish(repo config.Repo, env *publish.Env) error
    source, weak deps, EdDSA/RSA/v6-signed). CI runs real dnf5 with
    `repo_gpgcheck=1`. Remaining: sign package headers (an RSA/EdDSA
    header signature in the signature header) so `gpgcheck=1` works
-   without `rpmsign`. This needs real rpm in the loop to verify.
+   without `rpmsign`. This needs real rpm in the loop to verify. It now
+   matters more: Fedora 45's rpm 6.1 defaults to `%_pkgverify_level all`
+   and won't install unsigned packages at all (Fedora 44 and EL10 use
+   `digest`).
 4. **M4: GooGet** (done, except a live client test). Reads the
    `<name>.pkgspec` from `.goo` (gzip tarball) with googet's validation
    (arch list, `fixVer` + semver + `@N`). The pkgspec is preserved

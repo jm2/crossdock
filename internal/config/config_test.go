@@ -12,12 +12,56 @@ import (
 )
 
 func TestLoadExample(t *testing.T) {
-	c, err := Load(filepath.Join("..", "..", "examples", "crossdock.json"))
+	c, err := Load(filepath.Join("..", "..", "examples", "crossdock.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(c.Repos) != 2 || c.Repos[1].Codename != "stable" || c.Repos[1].Origin != "jm2" {
 		t.Errorf("defaults not applied: %+v", c.Repos[1])
+	}
+	if got := c.Repos[0].Architectures; len(got) != 2 || got[1] != "aarch64" || !c.Repos[0].SignPackages {
+		t.Errorf("arch repo: %+v", c.Repos[0])
+	}
+}
+
+// The config shipped in the packages must load as installed.
+func TestLoadPackagedConfig(t *testing.T) {
+	t.Setenv("CREDENTIALS_DIRECTORY", "/run/credentials/crossdock-publish.service")
+	c, err := Load(filepath.Join("..", "..", "build-aux", "etc", "crossdock.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Repos) != 4 || c.Serve.Listen != ":8080" ||
+		c.Signing.KeyFile != "/run/credentials/crossdock-publish.service/signing.asc" {
+		t.Errorf("unexpected config: %+v %+v", c, c.Signing)
+	}
+}
+
+func TestYAMLErrors(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"unknown key": {"output: o\nrepos:\n  - name: a\n    format: deb\n    source: s\n    suit: stable\n", "6:"},
+		"duplicate":   {"output: o\noutput: p\nrepos: []\n", "2:"},
+		"wrong type":  {"output: o\nkeep_releases: lots\nrepos: []\n", "2:"},
+	} {
+		p := filepath.Join(t.TempDir(), "c.yaml")
+		os.WriteFile(p, []byte(tc.body), 0o644)
+		_, err := Load(p)
+		if err == nil {
+			t.Errorf("%s: Load succeeded", name)
+			continue
+		}
+		// Errors should point at the offending line.
+		if !strings.Contains(err.Error(), "["+tc.want) {
+			t.Errorf("%s: error has no position %q: %v", name, tc.want, err)
+		}
+	}
+}
+
+func TestEmptyFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	os.WriteFile(p, nil, 0o644)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "output is required") {
+		t.Errorf("empty config: %v", err)
 	}
 }
 

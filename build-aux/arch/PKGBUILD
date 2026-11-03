@@ -16,10 +16,11 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/jm2/crossdock"
 license=('GPL-3.0-or-later')
 options=('!lto' '!debug' '!strip')
-depends=('gnupg' 'xz' 'zstd')
-optdepends=('firewalld: the bundled crossdock service definition')
+depends=()
+optdepends=('gnupg: sign with a GnuPG keyring or smartcard (signing.gnupg_home)'
+            'firewalld: the bundled crossdock service definition')
 makedepends=('go' 'make')
-backup=('etc/crossdock/crossdock.json')
+backup=('etc/crossdock/crossdock.yaml')
 source=()
 
 build() {

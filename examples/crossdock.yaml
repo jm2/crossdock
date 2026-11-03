@@ -1,0 +1,22 @@
+# crossdock configuration. See README.md for every option.
+output: /srv/crossdock
+keep_releases: 3
+
+signing:
+  key_file: /etc/crossdock/signing.asc   # from `crossdock keygen`
+  passphrase_env: CROSSDOCK_PASSPHRASE   # only for a protected key
+
+repos:
+  - name: jm2
+    format: arch
+    source: /srv/incoming/arch
+    architectures: [x86_64, aarch64]     # "any" packages land in each
+    sign_packages: true                  # create missing .sig files
+
+  - name: jm2
+    format: deb
+    source: /srv/incoming/deb
+    suite: stable
+    component: main
+    architectures: [amd64, arm64]        # "all" packages land in each
+    description: jm2 packages

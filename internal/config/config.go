@@ -3,20 +3,22 @@
 
 // Package config loads and validates crossdock configuration.
 //
-// M1 uses JSON (standard library only); YAML is planned once the module
-// can take third-party dependencies. The schema is identical either way.
+// The config file is YAML. JSON is valid YAML, so a JSON config loads too.
 package config
 
 import (
 	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-yaml"
 )
 
 // Format identifies a repository format.
@@ -33,20 +35,20 @@ const (
 type Config struct {
 	// Output is the root directory releases are published under. The web
 	// server should serve <Output>/current.
-	Output string `json:"output"`
+	Output string `yaml:"output"`
 	// KeepReleases is how many releases (including current) to retain.
-	KeepReleases int `json:"keep_releases"`
+	KeepReleases int `yaml:"keep_releases"`
 	// Signing configures the OpenPGP key. Nil means unsigned.
-	Signing *Signing `json:"signing,omitempty"`
+	Signing *Signing `yaml:"signing,omitempty"`
 	// NoSymlinks publishes without symlinks: in-release links become
 	// hardlinks or copies, and the current release is recorded in
 	// <output>/current.id instead of the current symlink. crossdock serve
-	// follows either; static web servers need symlinks. Windows without
-	// symlink privileges falls back to this automatically.
-	NoSymlinks bool `json:"no_symlinks,omitempty"`
+	// follows either; static web servers need symlinks. Windows always
+	// publishes this way.
+	NoSymlinks bool `yaml:"no_symlinks,omitempty"`
 	// Serve configures `crossdock serve`.
-	Serve Serve  `json:"serve,omitempty"`
-	Repos []Repo `json:"repos"`
+	Serve Serve  `yaml:"serve,omitempty"`
+	Repos []Repo `yaml:"repos"`
 }
 
 // DefaultListen is serve's default address: every interface, port 8080,
@@ -56,53 +58,53 @@ const DefaultListen = ":8080"
 // Serve configures the built-in HTTP server.
 type Serve struct {
 	// Listen is the TCP address to listen on (default ":8080").
-	Listen string `json:"listen,omitempty"`
+	Listen string `yaml:"listen,omitempty"`
 	// Index enables HTML directory listings.
-	Index bool `json:"index,omitempty"`
+	Index bool `yaml:"index,omitempty"`
 }
 
 // Signing configures repository and package signatures.
 type Signing struct {
 	// KeyFile is an armored private key, imported into a throwaway GnuPG
 	// home for each run. Mutually exclusive with GnuPGHome.
-	KeyFile string `json:"key_file,omitempty"`
+	KeyFile string `yaml:"key_file,omitempty"`
 	// GnuPGHome uses an existing keyring (and agent / smartcard) instead.
-	GnuPGHome string `json:"gnupg_home,omitempty"`
+	GnuPGHome string `yaml:"gnupg_home,omitempty"`
 	// KeyID selects the signing key; required with GnuPGHome.
-	KeyID string `json:"key_id,omitempty"`
+	KeyID string `yaml:"key_id,omitempty"`
 	// PassphraseEnv names an environment variable holding the passphrase.
-	PassphraseEnv string `json:"passphrase_env,omitempty"`
+	PassphraseEnv string `yaml:"passphrase_env,omitempty"`
 	// PassphraseFile reads the passphrase from a file (trailing newline
 	// trimmed), e.g. a systemd credential.
-	PassphraseFile string `json:"passphrase_file,omitempty"`
+	PassphraseFile string `yaml:"passphrase_file,omitempty"`
 }
 
 // Repo is one published repository.
 type Repo struct {
-	Name   string `json:"name"`
-	Format Format `json:"format"`
+	Name   string `yaml:"name"`
+	Format Format `yaml:"format"`
 	// Source is the directory of package files that make up this repo.
-	Source string `json:"source"`
+	Source string `yaml:"source"`
 	// Architectures lists the arch directories to emit. Arch-independent
 	// packages (deb "all", pacman "any") are placed in every one. If empty,
 	// the concrete architectures found in Source are used.
-	Architectures []string `json:"architectures,omitempty"`
+	Architectures []string `yaml:"architectures,omitempty"`
 
 	// deb
-	Suite       string `json:"suite,omitempty"`
-	Codename    string `json:"codename,omitempty"`
-	Component   string `json:"component,omitempty"`
-	Origin      string `json:"origin,omitempty"`
-	Label       string `json:"label,omitempty"`
-	Description string `json:"description,omitempty"`
+	Suite       string `yaml:"suite,omitempty"`
+	Codename    string `yaml:"codename,omitempty"`
+	Component   string `yaml:"component,omitempty"`
+	Origin      string `yaml:"origin,omitempty"`
+	Label       string `yaml:"label,omitempty"`
+	Description string `yaml:"description,omitempty"`
 	// ValidFor adds Valid-Until to Release (e.g. "7d", "36h"), so clients
 	// refuse a stale or replayed index. Publish more often than this;
 	// crossdock-publish.timer republishes daily.
-	ValidFor string `json:"valid_for,omitempty"`
+	ValidFor string `yaml:"valid_for,omitempty"`
 
 	// arch
 	// SignPackages creates detached .sig files for packages that lack one.
-	SignPackages bool `json:"sign_packages,omitempty"`
+	SignPackages bool `yaml:"sign_packages,omitempty"`
 }
 
 // ValidDuration parses ValidFor: a Go duration, or a number of days with
@@ -140,10 +142,10 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
 	var c Config
-	if err := dec.Decode(&c); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(b), yaml.DisallowUnknownField())
+	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
+		// goccy's errors carry the line and column with a source excerpt.
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	base, err := filepath.Abs(filepath.Dir(path))

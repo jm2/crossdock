@@ -13,12 +13,12 @@
 #   [Service]
 #   LoadCredential=passphrase:/etc/crossdock/passphrase
 #
-# and set "passphrase_file": "${CREDENTIALS_DIRECTORY}/passphrase" under
-# "signing" in /etc/crossdock/crossdock.json.
+# and set passphrase_file: ${CREDENTIALS_DIRECTORY}/passphrase under
+# signing: in /etc/crossdock/crossdock.yaml.
 [Unit]
 Description=crossdock: publish package repositories
 Documentation=https://github.com/jm2/crossdock
-ConditionPathExists=/etc/crossdock/crossdock.json
+ConditionPathExists=/etc/crossdock/crossdock.yaml
 ConditionPathExists=/etc/crossdock/signing.asc
 
 [Service]
@@ -29,13 +29,14 @@ Group=crossdock
 # a dotfile, then rename): crossdock skips dotfiles, so it never reads a
 # half-written package.
 ExecStartPre=/usr/bin/sleep 5
-ExecStart=@CROSSDOCK@ publish -c /etc/crossdock/crossdock.json
+ExecStart=@CROSSDOCK@ publish -c /etc/crossdock/crossdock.yaml
 LoadCredential=signing.asc:/etc/crossdock/signing.asc
 TimeoutStartSec=30min
 
 UMask=0022
 ReadWritePaths=/var/lib/crossdock/repo
-# Publishing needs no network; gpg talks to its agent over a Unix socket.
+# Publishing needs no network. Signing is native; AF_UNIX is left for a
+# gnupg_home key, where gpg talks to its agent over a Unix socket.
 PrivateNetwork=yes
 RestrictAddressFamilies=AF_UNIX
 NoNewPrivileges=yes

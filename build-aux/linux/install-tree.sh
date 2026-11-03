@@ -10,7 +10,7 @@
 #   <prefix>/lib/sysusers.d/crossdock.conf
 #   <prefix>/lib/tmpfiles.d/crossdock.conf
 #   <prefix>/lib/firewalld/services/crossdock.xml
-#   /etc/crossdock/crossdock.json   (config file; never overwritten on upgrade)
+#   /etc/crossdock/crossdock.yaml   (config file; never overwritten on upgrade)
 #
 # Nothing is enabled at install. The crossdock account and
 # /var/lib/crossdock come from sysusers.d and tmpfiles.d.
@@ -40,4 +40,4 @@ done
 install -Dm644 "$units/crossdock.sysusers" "$dest$prefix/lib/sysusers.d/crossdock.conf"
 install -Dm644 "$units/crossdock.tmpfiles" "$dest$prefix/lib/tmpfiles.d/crossdock.conf"
 install -Dm644 "$units/crossdock.firewalld.xml" "$dest$prefix/lib/firewalld/services/crossdock.xml"
-install -Dm644 "$root/build-aux/etc/crossdock.json" "$dest/etc/crossdock/crossdock.json"
+install -Dm644 "$root/build-aux/etc/crossdock.yaml" "$dest/etc/crossdock/crossdock.yaml"

@@ -1,10 +1,10 @@
 # Builds crossdock from the release source. Used by COPR (through Packit,
 # see .packit.yaml) and by the release workflow's .rpm job.
 #
-# crossdock uses only the Go standard library. When the builder's Go is
-# older than go.mod asks for, the go command downloads that toolchain from
-# proxy.golang.org (checked against sum.golang.org), so COPR builds need
-# network access (enable_net).
+# The build downloads crossdock's Go modules, and the Go toolchain go.mod
+# names when the builder's Go is older, from proxy.golang.org (checked
+# against go.sum and sum.golang.org), so COPR builds need network access
+# (enable_net).
 
 # Static, stripped Go binary: there is no debug information to package.
 %global debug_package %{nil}
@@ -29,11 +29,9 @@ BuildRequires:  make
 BuildRequires:  systemd-rpm-macros
 %{?systemd_requires}
 Requires(pre):  systemd
-# Signing, and reading xz- and zstd-compressed packages (dpkg-deb on Ubuntu
-# and makepkg default to zstd), until native support lands.
-Requires:       gnupg2
-Requires:       xz
-Requires:       zstd
+# Signing and xz/zstd decoding are native. gpg is only needed to sign
+# from a GnuPG keyring or smartcard (signing.gnupg_home).
+Suggests:       gnupg2
 
 %description
 crossdock takes one directory of built packages per format and publishes
@@ -98,7 +96,7 @@ EOF
 %dir %{_prefix}/lib/firewalld/services
 %{_prefix}/lib/firewalld/services/crossdock.xml
 %dir %{_sysconfdir}/crossdock
-%config(noreplace) %{_sysconfdir}/crossdock/crossdock.json
+%config(noreplace) %{_sysconfdir}/crossdock/crossdock.yaml
 
 %changelog
 * Tue Nov 03 2026 crossdock contributors - 0.1.0-1

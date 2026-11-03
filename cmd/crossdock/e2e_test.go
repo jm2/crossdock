@@ -40,22 +40,16 @@ func run(t *testing.T, dir string, name string, args ...string) string {
 	return string(out)
 }
 
-// genKey creates a throwaway passphrase-protected signing key and returns
-// the path of its armored secret export.
+// genKey creates a throwaway passphrase-protected signing key with
+// `crossdock keygen` and returns the path of its armored secret key.
 func genKey(t *testing.T, passphrase string) string {
-	home, err := os.MkdirTemp("", "cdk")
-	if err != nil {
+	dir := t.TempDir()
+	pf := filepath.Join(dir, "passphrase")
+	if err := os.WriteFile(pf, []byte(passphrase+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		exec.Command("gpgconf", "--homedir", home, "--kill", "all").Run()
-		os.RemoveAll(home)
-	})
-	g := []string{"--homedir", home, "--batch", "--pinentry-mode", "loopback", "--passphrase", passphrase}
-	run(t, home, "gpg", append(g, "--quick-gen-key", "crossdock test <test@example.invalid>", "ed25519", "sign", "never")...)
-	key := filepath.Join(t.TempDir(), "signing.asc")
-	out := run(t, home, "gpg", append(g, "--armor", "--export-secret-keys")...)
-	if err := os.WriteFile(key, []byte(out), 0o600); err != nil {
+	key := filepath.Join(dir, "signing.asc")
+	if err := cmdKeygen([]string{"-uid", "crossdock test <test@example.invalid>", "-out", key, "-passphrase-file", pf}); err != nil {
 		t.Fatal(err)
 	}
 	return key
@@ -73,9 +67,11 @@ func buildDeb(t *testing.T, outDir, name, version, arch, compression string) {
 }
 
 // TestAptEndToEnd publishes a signed repo and has a real apt-get trust it,
-// update from it and download from it.
+// update from it and download from it. Signing, keygen and xz/zstd
+// decoding are all native; apt checks the signatures with its own
+// verifier (sqv on Debian 13, gpgv on older releases).
 func TestAptEndToEnd(t *testing.T) {
-	need(t, "gpg", "dpkg-deb", "apt-get", "xz")
+	need(t, "dpkg-deb", "apt-get")
 	const pass = "correct horse"
 	t.Setenv("CROSSDOCK_TEST_PASS", pass)
 	key := genKey(t, pass)
@@ -84,7 +80,7 @@ func TestAptEndToEnd(t *testing.T) {
 	src := filepath.Join(work, "incoming")
 	os.MkdirAll(src, 0o755)
 	buildDeb(t, src, "hello-crossdock", "1:1.0-1", "amd64", "xz")
-	buildDeb(t, src, "crossdock-docs", "1.0", "all", "gzip")
+	buildDeb(t, src, "crossdock-docs", "1.0", "all", "zstd")
 
 	cfg := map[string]any{
 		"output": "out",
@@ -96,8 +92,9 @@ func TestAptEndToEnd(t *testing.T) {
 			"suite": "stable", "codename": "crossdock", "architectures": []string{"amd64", "arm64"},
 		}},
 	}
+	// JSON is valid YAML, so the config loader takes it as is.
 	b, _ := json.Marshal(cfg)
-	cfgPath := filepath.Join(work, "crossdock.json")
+	cfgPath := filepath.Join(work, "crossdock.yaml")
 	os.WriteFile(cfgPath, b, 0o644)
 
 	if err := cmdPublish([]string{"-c", cfgPath}); err != nil {
