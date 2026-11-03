@@ -1,0 +1,380 @@
+name: Release
+# Every action is pinned to a full commit SHA; Dependabot keeps the pins and
+# their version comments current. Build jobs get a read-only token; only the
+# attest job can mint an OIDC token, and only the publish job, which runs no
+# project code, can write.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  # Tests the tagged source, builds every binary once, and packages the plain
+  # archives and the .deb files from them.
+  build:
+    name: Build binaries, archives and .deb
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check the tag
+        id: version
+        run: |
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+          if [[ ! "$GITHUB_REF_NAME" =~ $semver ]]; then
+            echo "::error::release tags must be v-prefixed semantic versions; got $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # The release notes are the changelog section for this exact version,
+      # so they are reviewed in the tagged source, not typed later.
+      - name: Extract the release notes from the changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - "$VERSION" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          section = re.search(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|^\[[^\]]+\]: |\Z)",
+              text,
+              re.M | re.S,
+          )
+          if section is None:
+              sys.exit(f"CHANGELOG.md has no '## [{version}]' section")
+          body = section.group(1).strip()
+          if not body:
+              sys.exit(f"CHANGELOG.md section for {version} is empty")
+          Path("notes").mkdir()
+          Path("notes/RELEASE_NOTES.md").write_text(body + "\n", encoding="utf-8")
+          PY
+      - name: Test tagged source
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+      - name: Build every release target
+        run: make cross VERSION="$GITHUB_REF_NAME"
+      - name: Check the version is stamped into the binary
+        run: |
+          out=$(dist/crossdock-linux-amd64 version)
+          echo "$out"
+          case "$out" in
+            "crossdock $GITHUB_REF_NAME "*) ;;
+            *) echo "::error::version was not stamped by -ldflags -X"; exit 1 ;;
+          esac
+      - name: Package archives
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          for target in linux-amd64 linux-arm64 darwin-arm64 windows-amd64; do
+            name="crossdock-${GITHUB_REF_NAME}-${target}"
+            stage="stage/$name"
+            mkdir -p "$stage"
+            case "$target" in
+              windows-*) cp "dist/crossdock-$target.exe" "$stage/crossdock.exe" ;;
+              *) cp "dist/crossdock-$target" "$stage/crossdock" ;;
+            esac
+            cp LICENSE README.md "$stage/"
+            case "$target" in
+              windows-*) (cd stage && zip -qr "../release/$name.zip" "$name") ;;
+              *) tar -C stage --owner=0 --group=0 --numeric-owner -czf "release/$name.tar.gz" "$name" ;;
+            esac
+          done
+      - name: Build .deb packages
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            make deb ARCH="$arch" VERSION="$GITHUB_REF_NAME"
+            cp "dist/crossdock-$arch.deb" release/
+          done
+      # crossdock publishes its own packages: the release's .debs must make
+      # a valid repo.
+      - name: Publish the .debs with crossdock
+        run: |
+          set -euo pipefail
+          mkdir -p dogfood/in
+          cp release/*.deb dogfood/in/
+          echo '{"output":"out","repos":[{"name":"crossdock","format":"deb","source":"in","architectures":["amd64","arm64"]}]}' > dogfood/crossdock.json
+          dist/crossdock-linux-amd64 publish -allow-unsigned -c dogfood/crossdock.json
+          grep -c '^Package: crossdock$' dogfood/out/current/deb/crossdock/dists/stable/main/binary-arm64/Packages
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: notes/RELEASE_NOTES.md
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-build
+          path: release/
+          if-no-files-found: error
+
+  # The same spec COPR builds, from the tagged source, on Fedora.
+  rpm:
+    name: RPM (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    container:
+      image: fedora:44
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Install build dependencies
+        run: dnf install -y --setopt=install_weak_deps=False git-core golang make rpm-build systemd-rpm-macros
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the .rpm
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          rpmver=${VERSION//-/\~}
+          top="$PWD/rpmbuild"
+          mkdir -p "$top/SOURCES" "$top/SPECS"
+          git archive --format=tar.gz --prefix="crossdock-$rpmver/" -o "$top/SOURCES/v$rpmver.tar.gz" HEAD
+          sed "s/^Version:.*/Version:        $rpmver/" build-aux/rpm/crossdock.spec > "$top/SPECS/crossdock.spec"
+          # crossdock_tag stamps the binary with the real tag (v0.2.0-rc.1, not v0.2.0~rc.1).
+          rpmbuild --define "_topdir $top" --define "crossdock_tag $GITHUB_REF_NAME" -bb "$top/SPECS/crossdock.spec"
+          mkdir -p out
+          cp "$top"/RPMS/*/crossdock-*.rpm "out/crossdock-$ARCH.rpm"
+          rpm -qip "out/crossdock-$ARCH.rpm"
+          rpm -qlp "out/crossdock-$ARCH.rpm"
+          # The scripts create the account and directories and enable nothing.
+          rpm -qp --scripts "out/crossdock-$ARCH.rpm" | tee scripts.txt
+          grep -q 'systemd-sysusers' scripts.txt
+          grep -q 'systemd-tmpfiles' scripts.txt
+          rpm -qcp "out/crossdock-$ARCH.rpm" | grep -qx /etc/crossdock/crossdock.json
+      # Install the package in this Fedora container. There's no systemd
+      # here, so check the payload rather than the services; CI's packaging
+      # job runs the units under real systemd.
+      - name: Install and check the .rpm
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          dnf install -y "./out/crossdock-$ARCH.rpm"
+          crossdock version
+          getent passwd crossdock
+          systemd-tmpfiles --create crossdock.conf
+          stat -c '%U:%G %a %n' /var/lib/crossdock/repo /var/lib/crossdock/incoming/deb
+          systemd-analyze verify /usr/lib/systemd/system/crossdock-serve.service \
+            /usr/lib/systemd/system/crossdock-publish.service /usr/lib/systemd/system/crossdock-publish.path
+      # crossdock publishes its own .rpm, and dnf reads that repo.
+      - name: Publish the .rpm with crossdock and query it with dnf
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dogfood/in
+          cp "out/crossdock-$ARCH.rpm" dogfood/in/
+          echo '{"output":"out","repos":[{"name":"crossdock","format":"rpm","source":"in"}]}' > dogfood/crossdock.json
+          crossdock publish -allow-unsigned -c dogfood/crossdock.json
+          dnf --setopt=reposdir=/dev/null --repofrompath=dogfood,"file://$PWD/dogfood/out/current/rpm/crossdock" \
+            --setopt=dogfood.gpgcheck=0 --repo=dogfood repoquery --qf '%{full_nevra}\n' | tee nevra.txt
+          grep -q "^crossdock-0:${VERSION//-/\~}-1" nevra.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: out/crossdock-${{ matrix.arch }}.rpm
+          if-no-files-found: error
+
+  arch:
+    name: Arch Linux package (x86_64)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm git go
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the package
+        run: |
+          set -euo pipefail
+          # makepkg refuses to run as root.
+          useradd -m builder
+          cp -r . /home/builder/crossdock
+          cp build-aux/arch/PKGBUILD /home/builder/crossdock/PKGBUILD
+          chown -R builder:builder /home/builder/crossdock
+          su builder -c "cd /home/builder/crossdock && CROSSDOCK_VERSION='$GITHUB_REF_NAME' makepkg -f --noconfirm"
+          pkg=$(su builder -c "cd /home/builder/crossdock && CROSSDOCK_VERSION='$GITHUB_REF_NAME' makepkg --packagelist")
+          if [[ -z "$pkg" || "$pkg" == *$'\n'* || ! -f "$pkg" ]]; then
+            echo "Expected exactly one built package; makepkg lists: $pkg" >&2
+            exit 1
+          fi
+          mkdir -p out
+          cp "$pkg" out/crossdock-x86_64.pkg.tar.zst
+          bsdtar -tf out/crossdock-x86_64.pkg.tar.zst
+      # crossdock reads its own Arch package and publishes it; then real
+      # pacman syncs from that repo, which checks crossdock's db format.
+      - name: Publish the package with crossdock and sync it with pacman
+        run: |
+          set -euo pipefail
+          pacman -U --noconfirm out/crossdock-x86_64.pkg.tar.zst
+          crossdock version
+          mkdir -p dogfood/in
+          cp out/crossdock-x86_64.pkg.tar.zst dogfood/in/
+          echo '{"output":"out","repos":[{"name":"dogfood","format":"arch","source":"in"}]}' > dogfood/crossdock.json
+          crossdock publish -allow-unsigned -c dogfood/crossdock.json
+          cat >> /etc/pacman.conf <<EOF
+          [dogfood]
+          SigLevel = Never
+          Server = file://$PWD/dogfood/out/current/arch/\$repo/\$arch
+          EOF
+          pacman -Sy --noconfirm
+          pacman -Si dogfood/crossdock
+          pacman -Fy >/dev/null
+          pacman -Fl dogfood/crossdock | grep -q usr/bin/crossdock
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arch-x86_64
+          path: out/crossdock-x86_64.pkg.tar.zst
+          if-no-files-found: error
+
+  checksums:
+    name: SHA256 checksums
+    needs: [build, rpm, arch]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # Every artifact, each in its own folder; only the expected release
+      # assets are copied out of them.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+      - name: Collect the assets and write SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          expected=(
+            "crossdock-${GITHUB_REF_NAME}-linux-amd64.tar.gz"
+            "crossdock-${GITHUB_REF_NAME}-linux-arm64.tar.gz"
+            "crossdock-${GITHUB_REF_NAME}-darwin-arm64.tar.gz"
+            "crossdock-${GITHUB_REF_NAME}-windows-amd64.zip"
+            crossdock-amd64.deb
+            crossdock-arm64.deb
+            crossdock-x86_64.rpm
+            crossdock-aarch64.rpm
+            crossdock-x86_64.pkg.tar.zst
+          )
+          mkdir release
+          for f in "${expected[@]}"; do
+            mapfile -t found < <(find artifacts -type f -name "$f")
+            if (( ${#found[@]} != 1 )); then
+              echo "::error::expected one $f among the build artifacts, found ${#found[@]}"
+              exit 1
+            fi
+            cp "${found[0]}" release/
+          done
+          cd release
+          sha256sum -- "${expected[@]}" | LC_ALL=C sort -k2 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+
+  # Attestations need a public repository (or GitHub Enterprise Cloud), so
+  # this job is skipped while the repository is private.
+  attest:
+    name: Attest build provenance
+    needs: checksums
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release/SHA256SUMS.txt
+
+  # The only job with a write token for the repository. It creates a draft,
+  # so nothing is public until a maintainer publishes it.
+  publish:
+    name: Create draft release
+    needs: [build, checksums, attest]
+    if: ${{ always() && needs.build.result == 'success' && needs.checksums.result == 'success' && (needs.attest.result == 'success' || needs.attest.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
+      # Nothing here changes an existing release, draft or published: a
+      # draft could be published between a check and a delete. Delete a
+      # stale draft by hand, then rerun.
+      - name: Refuse to touch an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # A failed lookup must not look like "no release exists".
+          if ! listing=$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id"); then
+            echo "::error::could not list the releases for $GITHUB_REF_NAME; refusing to publish unchecked"
+            exit 1
+          fi
+          if [[ -n "$listing" ]]; then
+            echo "::error::a release for $GITHUB_REF_NAME already exists; delete it if it is a stale draft, then rerun"
+            exit 1
+          fi
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          prerelease=
+          case "$GITHUB_REF_NAME" in *-*) prerelease=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" release/* --draft --verify-tag \
+            --title "crossdock v$VERSION Alpha" --notes-file notes/RELEASE_NOTES.md $prerelease
