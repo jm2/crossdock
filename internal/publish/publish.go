@@ -44,6 +44,10 @@ const (
 // symlink is os.Symlink, swappable so tests can force the fallbacks.
 var symlink = os.Symlink
 
+// removeLink is os.Remove for the old current symlink, swappable so tests
+// can make the migration to current.id fail.
+var removeLink = os.Remove
+
 // Digest describes a file's size and hashes.
 type Digest struct {
 	Size   int64
@@ -373,17 +377,51 @@ func (r *Release) Commit() error {
 			return err
 		}
 		_ = os.Remove(filepath.Join(r.root, currentFile))
-	} else {
-		if err := writeAtomic(filepath.Join(r.root, currentFile), []byte(r.ID+"\n")); err != nil {
-			return err
-		}
-		// A stale symlink would otherwise win over current.id.
-		if fi, err := os.Lstat(filepath.Join(r.root, currentLink)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			_ = os.Remove(filepath.Join(r.root, currentLink))
-		}
+	} else if err := r.commitID(); err != nil {
+		return err
 	}
 	r.done = true
 	return nil
+}
+
+// commitID points current.id at this release, then removes any current
+// symlink left by an earlier publish, which would otherwise win over
+// current.id. If that removal fails, current.id is put back, so it never
+// names a release the caller is about to abort, and the symlink keeps
+// serving the release that was live.
+func (r *Release) commitID() error {
+	idPath, link := filepath.Join(r.root, currentFile), filepath.Join(r.root, currentLink)
+	old, readErr := os.ReadFile(idPath)
+	if err := writeAtomic(idPath, []byte(r.ID+"\n")); err != nil {
+		return err
+	}
+	fi, err := os.Lstat(link)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	err = retry(func() error { return removeLink(link) })
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	if readErr == nil {
+		_ = writeAtomic(idPath, old)
+	} else {
+		_ = os.Remove(idPath)
+	}
+	return fmt.Errorf("removing the old %s symlink: %w", currentLink, err)
+}
+
+// retry runs op until it succeeds, fails with a non-transient error, or
+// about two seconds of transient failures have passed (see transient).
+func retry(op func() error) error {
+	var err error
+	for i := 0; i < 20; i++ {
+		if err = op(); err == nil || !transient(err) {
+			return err
+		}
+		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)
+	}
+	return err
 }
 
 // writeAtomic replaces path with data via a temp file and rename.
@@ -403,7 +441,7 @@ func writeAtomic(path string, data []byte) error {
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return retry(func() error { return os.Rename(tmp.Name(), path) })
 }
 
 func (r *Release) writeManifest() error {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -209,5 +210,51 @@ func TestNoSymlinks(t *testing.T) {
 	}
 	if removed, _ := Prune(root, 1); len(removed) != 1 || removed[0] != r.ID {
 		t.Errorf("pruned %v", removed)
+	}
+}
+
+// Moving from the current symlink to current.id, as Windows does for a
+// tree published with symlinks: the symlink must go, and if it can't, the
+// publish fails and the release that was live stays live.
+func TestMigrateToCurrentID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a symlink-based first release")
+	}
+	root := t.TempDir()
+	r1, _ := Begin(root, time.Unix(1000, 0))
+	if err := r1.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(filepath.Join(root, "current")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("first release didn't publish a symlink: %v", err)
+	}
+
+	oldRemove := removeLink
+	removeLink = func(string) error { return errors.New("in use") }
+	r2, _ := Begin(root, time.Unix(2000, 0))
+	r2.NoSymlinks()
+	err := r2.Commit()
+	removeLink = oldRemove
+	if err == nil {
+		t.Fatal("Commit succeeded although the old symlink stayed")
+	}
+	r2.Abort()
+	if Current(root) != r1.ID {
+		t.Errorf("Current = %q, want the still-live %q", Current(root), r1.ID)
+	}
+	if _, err := os.Stat(filepath.Join(root, "current.id")); !os.IsNotExist(err) {
+		t.Errorf("current.id left behind naming the aborted release: %v", err)
+	}
+
+	r3, _ := Begin(root, time.Unix(3000, 0))
+	r3.NoSymlinks()
+	if err := r3.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "current")); !os.IsNotExist(err) {
+		t.Error("old current symlink kept")
+	}
+	if Current(root) != r3.ID {
+		t.Errorf("Current = %q, want %q", Current(root), r3.ID)
 	}
 }

@@ -6,7 +6,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,17 +26,14 @@ func TestLoadExample(t *testing.T) {
 
 // The config shipped in the packages must load as installed.
 func TestLoadPackagedConfig(t *testing.T) {
-	t.Setenv("CREDENTIALS_DIRECTORY", "/run/credentials/crossdock-publish.service")
+	creds := t.TempDir()
+	t.Setenv("CREDENTIALS_DIRECTORY", creds)
 	c, err := Load(filepath.Join("..", "..", "build-aux", "etc", "crossdock.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// It ships only in Linux packages; on Windows its paths aren't absolute.
-	if runtime.GOOS == "windows" {
-		return
-	}
 	if len(c.Repos) != 4 || c.Serve.Listen != ":8080" ||
-		c.Signing.KeyFile != "/run/credentials/crossdock-publish.service/signing.asc" {
+		filepath.Clean(c.Signing.KeyFile) != filepath.Join(creds, "signing.asc") {
 		t.Errorf("unexpected config: %+v %+v", c, c.Signing)
 	}
 }
@@ -59,6 +55,20 @@ func TestYAMLErrors(t *testing.T) {
 		if !strings.Contains(err.Error(), "["+tc.want) {
 			t.Errorf("%s: error has no position %q: %v", name, tc.want, err)
 		}
+	}
+}
+
+func TestDocumentMarkers(t *testing.T) {
+	// A leading --- or a trailing ... is still one document.
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	os.WriteFile(p, []byte("---\noutput: o\nrepos:\n  - {name: a, format: deb, source: s}\n...\n"), 0o644)
+	if _, err := Load(p); err != nil {
+		t.Error(err)
+	}
+	// A second document would be silently ignored, so it's an error.
+	os.WriteFile(p, []byte("output: o\nrepos:\n  - {name: a, format: deb, source: s}\n---\noutput: p\n"), 0o644)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "one YAML document") {
+		t.Errorf("second document: %v", err)
 	}
 }
 

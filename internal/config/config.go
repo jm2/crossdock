@@ -148,6 +148,13 @@ func Load(path string) (*Config, error) {
 		// goccy's errors carry the line and column with a source excerpt.
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	// Later documents would be parsed and then silently ignored.
+	var extra any
+	if err := dec.Decode(&extra); err == nil {
+		return nil, fmt.Errorf("%s: only one YAML document is allowed (remove the extra ---)", path)
+	} else if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return nil, err

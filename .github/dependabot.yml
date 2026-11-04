@@ -19,7 +19,8 @@ updates:
 
   # Go modules (go-crypto, xz, klauspost/compress, go-yaml and their
   # dependencies). Minor and patch updates are grouped into one PR, which
-  # dependabot-auto-merge.yml merges once CI passes; majors stay manual.
+  # dependabot-auto-merge.yml merges once CI passes. Majors and security
+  # updates stay manual.
   - package-ecosystem: gomod
     directory: /
     schedule:

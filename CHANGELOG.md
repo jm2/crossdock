@@ -34,7 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI runs the real client for every supported target against a signed repo, and checks that a
   tampered index is rejected: apt on Debian stable (sqv) and Ubuntu (gpgv), dnf on Fedora 44
   and 45 and AlmaLinux 10, and pacman on Arch.
-- Dependabot auto-merges minor and patch updates to Go modules and Actions once CI passes.
+- Dependabot auto-merges its grouped minor and patch updates to Go modules and Actions once CI
+  passes. Major and security updates (which skip the cooldown) wait for review.
 
 ### Changed
 

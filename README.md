@@ -251,8 +251,9 @@ That test does a path-triggered publish, then has apt install and upgrade
 from `:8080`. `build-aux/ci/dnf-smoke.sh` and `pacman-smoke.sh` run the
 real dnf and pacman against signed repos in Fedora 44/45, AlmaLinux 10 and
 Arch containers, and check that a tampered index is rejected. Dependabot
-keeps Go modules and Actions current, and auto-merges minor and patch
-updates once the required checks pass. Tagging `vX.Y.Z` with a matching `CHANGELOG.md` section
+keeps Go modules and Actions current, and auto-merges its grouped minor
+and patch updates once the required checks pass. Major and security
+updates wait for review. Tagging `vX.Y.Z` with a matching `CHANGELOG.md` section
 builds the archives, `.deb`, `.rpm` (Fedora 44) and Arch package, then
 creates a draft release with `SHA256SUMS.txt` and provenance attestations.
 The Arch job also syncs crossdock's own repo with real pacman.
