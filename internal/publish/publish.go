@@ -48,6 +48,9 @@ var symlink = os.Symlink
 // can make the migration to current.id fail.
 var removeLink = os.Remove
 
+// lstat is os.Lstat for the old current symlink, swappable for tests.
+var lstat = os.Lstat
+
 // Digest describes a file's size and hashes.
 type Digest struct {
 	Size   int64
@@ -395,20 +398,28 @@ func (r *Release) commitID() error {
 	if err := writeAtomic(idPath, []byte(r.ID+"\n")); err != nil {
 		return err
 	}
-	fi, err := os.Lstat(link)
-	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+	rollback := func(err error) error {
+		if readErr == nil {
+			_ = writeAtomic(idPath, old)
+		} else {
+			_ = os.Remove(idPath)
+		}
+		return fmt.Errorf("removing the old %s symlink: %w", currentLink, err)
+	}
+	fi, err := lstat(link)
+	switch {
+	case os.IsNotExist(err):
+		return nil
+	case err != nil:
+		// It may still be a symlink that would win over current.id.
+		return rollback(err)
+	case fi.Mode()&os.ModeSymlink == 0:
 		return nil
 	}
-	err = retry(func() error { return removeLink(link) })
-	if err == nil || os.IsNotExist(err) {
-		return nil
+	if err := retry(func() error { return removeLink(link) }); err != nil && !os.IsNotExist(err) {
+		return rollback(err)
 	}
-	if readErr == nil {
-		_ = writeAtomic(idPath, old)
-	} else {
-		_ = os.Remove(idPath)
-	}
-	return fmt.Errorf("removing the old %s symlink: %w", currentLink, err)
+	return nil
 }
 
 // retry runs op until it succeeds, fails with a non-transient error, or

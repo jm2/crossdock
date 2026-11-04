@@ -246,6 +246,21 @@ func TestMigrateToCurrentID(t *testing.T) {
 		t.Errorf("current.id left behind naming the aborted release: %v", err)
 	}
 
+	// Not being able to inspect the old link must fail the same way.
+	oldLstat := lstat
+	lstat = func(string) (os.FileInfo, error) { return nil, errors.New("cannot inspect") }
+	rx, _ := Begin(root, time.Unix(2500, 0))
+	rx.NoSymlinks()
+	err = rx.Commit()
+	lstat = oldLstat
+	if err == nil {
+		t.Fatal("Commit succeeded although the old link couldn't be inspected")
+	}
+	rx.Abort()
+	if _, err := os.Stat(filepath.Join(root, "current.id")); Current(root) != r1.ID || !os.IsNotExist(err) {
+		t.Errorf("after failed inspect: Current = %q, current.id: %v", Current(root), err)
+	}
+
 	r3, _ := Begin(root, time.Unix(3000, 0))
 	r3.NoSymlinks()
 	if err := r3.Commit(); err != nil {
