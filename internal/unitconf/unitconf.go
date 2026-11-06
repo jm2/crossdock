@@ -10,6 +10,7 @@ package unitconf
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -41,56 +42,68 @@ func Generate(c *config.Config) ([]File, error) {
 	}
 	all := append([]string{c.Output}, sources...)
 
-	var path, tmp strings.Builder
-	path.WriteString(header + "[Path]\nPathChanged=\n")
+	var watch, tmp strings.Builder
+	watch.WriteString(header + "[Path]\nPathChanged=\n")
 	tmp.WriteString(header)
-	fmt.Fprintf(&tmp, "d %s 0755 crossdock crossdock -\n", c.Output)
+	fmt.Fprintf(&tmp, "d %s 0755 crossdock crossdock -\n", esc(c.Output))
 	for _, s := range sources {
-		fmt.Fprintf(&path, "PathChanged=%s\n", esc(s))
+		fmt.Fprintf(&watch, "PathChanged=%s\n", esc(s))
 		// As the packaged incoming directories: setgid, so that uploads
 		// are group crossdock.
-		fmt.Fprintf(&tmp, "d %s 2775 crossdock crossdock -\n", s)
+		fmt.Fprintf(&tmp, "d %s 2775 crossdock crossdock -\n", esc(s))
 	}
 	mounts := strings.Join(escAll(all), " ")
 
-	publish := header + "[Unit]\nRequiresMountsFor=" + mounts + "\n\n[Service]\nReadWritePaths=\n"
-	for _, p := range writable(c.Output, sources) {
-		publish += "ReadWritePaths=" + esc(p) + "\n"
+	dir, copied := writable(c.Output, sources)
+	publish := header
+	for _, s := range copied {
+		publish += "# " + esc(s) + " isn't under the path below, so its packages are copied, not hardlinked.\n"
 	}
+	publish += "[Unit]\nRequiresMountsFor=" + mounts + "\n\n[Service]\nReadWritePaths=\nReadWritePaths=" + esc(dir) + "\n"
 	return []File{
 		{"/etc/systemd/system/crossdock-publish.service.d/10-paths.conf", publish},
-		{"/etc/systemd/system/crossdock-publish.path.d/10-paths.conf", path.String()},
+		{"/etc/systemd/system/crossdock-publish.path.d/10-paths.conf", watch.String()},
 		{"/etc/systemd/system/crossdock-serve.service.d/10-paths.conf",
 			header + "[Unit]\nRequiresMountsFor=" + esc(c.Output) + "\n"},
 		{"/etc/tmpfiles.d/crossdock-paths.conf", tmp.String()},
 	}, nil
 }
 
-// writable picks ReadWritePaths for the publisher. Each entry becomes its
-// own mount and hardlinks can't cross mounts, so sources under the same
-// parent as output are covered by one entry on that parent. The parent is
-// the deepest directory holding output and those sources, but never the
-// root of the tree or a top-level directory such as /media, which would
-// open far more than crossdock needs. Other sources stay read-only, and
-// their packages are copied.
-func writable(output string, sources []string) []string {
-	best := output
-	for _, s := range sources {
-		p := common(best, s)
-		if strings.Count(p, string(filepath.Separator)) >= 2 {
-			best = p
-		}
-	}
-	return []string{best}
+// tooBroad lists shared directories that are never opened to the publisher,
+// besides anything less than two levels deep.
+var tooBroad = map[string]bool{
+	"/var/lib": true, "/var/cache": true, "/var/spool": true, "/var/tmp": true,
+	"/usr/lib": true, "/usr/local": true, "/usr/share": true, "/mnt/disks": true,
 }
 
-// common returns the deepest directory containing both a and b.
+// writable picks the publisher's ReadWritePaths entry. Each entry becomes
+// its own mount and hardlinks can't cross mounts, so output and the sources
+// under the same parent share one entry on that parent, unless that would
+// open a shared directory. Other sources stay read-only, and their packages
+// are copied; they're returned in copied.
+func writable(output string, sources []string) (dir string, copied []string) {
+	dir = output
+	for _, s := range sources {
+		if p := common(dir, s); !tooBroad[p] && strings.Count(p, "/") >= 2 {
+			dir = p
+		}
+	}
+	for _, s := range sources {
+		if s != dir && !strings.HasPrefix(s, dir+"/") {
+			copied = append(copied, s)
+		}
+	}
+	return dir, copied
+}
+
+// common returns the deepest directory containing both a and b. Unit files
+// always use slashes, so this uses path, not filepath.
 func common(a, b string) string {
-	for a != string(filepath.Separator) && a != "." {
-		if b == a || strings.HasPrefix(b, a+string(filepath.Separator)) {
+	for a != "/" && a != "." {
+		if b == a || strings.HasPrefix(b, a+"/") {
 			return a
 		}
-		a = filepath.Dir(a)
+		a = path.Dir(a)
 	}
 	return a
 }
@@ -106,16 +119,34 @@ func escAll(ps []string) []string {
 	return out
 }
 
-// Write writes files under root.
+// Write writes files under root. Every file is staged before any is
+// replaced, so a failed write can't leave a mix of old and new.
 func Write(root string, files []File) error {
-	for _, f := range files {
+	tmps := make([]string, len(files))
+	defer func() {
+		for _, t := range tmps {
+			if t != "" {
+				os.Remove(t)
+			}
+		}
+	}()
+	for i, f := range files {
 		p := filepath.Join(root, f.Path)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(p, []byte(f.Content), 0o644); err != nil {
+		t := p + ".tmp"
+		if err := os.WriteFile(t, []byte(f.Content), 0o644); err != nil {
 			return err
 		}
+		tmps[i] = t
+	}
+	for i, f := range files {
+		p := filepath.Join(root, f.Path)
+		if err := os.Rename(tmps[i], p); err != nil {
+			return err
+		}
+		tmps[i] = ""
 		fmt.Println(p)
 	}
 	return nil

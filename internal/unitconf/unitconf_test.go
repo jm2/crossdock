@@ -68,13 +68,23 @@ func TestUnrelatedSourceStaysReadOnly(t *testing.T) {
 	}
 }
 
-func TestShallowCommonParentNotOpened(t *testing.T) {
-	files, err := Generate(cfg("/media/r6/repo", "/media/r0/incoming"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pub := find(t, files, "publish.service.d"); !strings.Contains(pub, "ReadWritePaths=/media/r6/repo\n") {
-		t.Errorf("ReadWritePaths:\n%s", pub)
+func TestSharedDirectoriesNotOpened(t *testing.T) {
+	for _, tc := range []struct{ output, source, want string }{
+		{"/media/r6/repo", "/media/r0/incoming", "/media/r6/repo"},
+		{"/var/lib/crossdock/repo", "/var/lib/uploads/arch", "/var/lib/crossdock/repo"},
+		{"/srv/crossdock", "/srv/incoming/arch", "/srv/crossdock"},
+	} {
+		files, err := Generate(cfg(tc.output, tc.source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pub := find(t, files, "publish.service.d")
+		if !strings.Contains(pub, "ReadWritePaths="+tc.want+"\n") {
+			t.Errorf("%s + %s:\n%s", tc.output, tc.source, pub)
+		}
+		if !strings.Contains(pub, "# "+tc.source+" isn't under") {
+			t.Errorf("%s: a copied source must be reported:\n%s", tc.source, pub)
+		}
 	}
 }
 
@@ -82,12 +92,14 @@ func TestRejectsAndEscapes(t *testing.T) {
 	if _, err := Generate(cfg("/srv/my repo", "/srv/in")); err == nil {
 		t.Error("a path with a space must be refused")
 	}
-	files, err := Generate(cfg("/srv/50%/repo", "/srv/50%/in"))
+	files, err := Generate(cfg("/srv/a/50%b/repo", "/srv/a/50%b/in"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pub := find(t, files, "publish.service.d"); !strings.Contains(pub, "/srv/50%%") {
-		t.Errorf("%% must be escaped:\n%s", pub)
+	for _, name := range []string{"publish.service.d", "publish.path.d", "tmpfiles.d"} {
+		if c := find(t, files, name); !strings.Contains(c, "/srv/a/50%%b") || strings.Contains(c, "50%b") {
+			t.Errorf("%s: %% must be escaped:\n%s", name, c)
+		}
 	}
 }
 
@@ -99,5 +111,8 @@ func TestWrite(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "etc/tmpfiles.d/crossdock-paths.conf")); err != nil {
 		t.Error(err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(root, "etc/tmpfiles.d/*.tmp")); len(left) != 0 {
+		t.Errorf("temporary files left: %v", left)
 	}
 }

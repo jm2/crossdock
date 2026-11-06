@@ -87,7 +87,6 @@ func cmdPublish(args []string) error {
 	fs := flag.NewFlagSet("publish", flag.ExitOnError)
 	cfgPath := fs.String("c", "crossdock.yaml", "config file")
 	allowUnsigned := fs.Bool("allow-unsigned", false, "publish without signatures when no signing key is configured")
-	allowEmpty := fs.Bool("allow-empty", false, "let a repo that had packages go empty")
 	quiet := fs.Bool("q", false, "only print errors")
 	fs.Parse(args)
 
@@ -126,7 +125,7 @@ func cmdPublish(args []string) error {
 	if cfg.NoSymlinks {
 		rel.NoSymlinks()
 	}
-	if err := build(cfg, env, *allowEmpty); err != nil {
+	if err := build(cfg, env); err != nil {
 		rel.Abort()
 		return err
 	}
@@ -142,11 +141,11 @@ func cmdPublish(args []string) error {
 	return err
 }
 
-// checkNotEmpty counts r's packages. An empty source is usually a storage
-// problem, such as an unmounted disk, so emptying a repo that has packages
-// takes -allow-empty; publishing it would take the packages away from
-// every client. A repo that has never had packages may stay empty.
-func checkNotEmpty(r config.Repo, env *publish.Env, allowEmpty bool) error {
+// checkNotEmpty refuses to empty a repo that has packages. An empty source
+// is usually a storage problem, such as an unmounted disk, and publishing it
+// would take the packages away from every client. A repo that has never had
+// packages may stay empty, and allow_empty lets one be emptied on purpose.
+func checkNotEmpty(r config.Repo, env *publish.Env) error {
 	var suffixes []string
 	switch r.Format {
 	case config.FormatDeb:
@@ -162,20 +161,22 @@ func checkNotEmpty(r config.Repo, env *publish.Env, allowEmpty bool) error {
 	if err != nil {
 		return err
 	}
-	key := string(r.Format) + "/" + r.Name
-	env.Release.SetPackageCount(key, len(files))
 	if len(files) > 0 {
 		return nil
 	}
-	prev := env.Release.PreviousPackageCount(key)
-	if prev > 0 && !allowEmpty {
-		return fmt.Errorf("%s is empty but the repo has %d packages; is the disk mounted? (-allow-empty to publish it anyway)", r.Source, prev)
+	key := string(r.Format) + "/" + r.Name
+	prev, err := env.Release.PreviousPackages(key, suffixes...)
+	if err != nil {
+		return err
+	}
+	if prev > 0 && !r.AllowEmpty {
+		return fmt.Errorf("%s is empty but the published repo has packages; is the disk mounted? (set allow_empty: true on this repo to empty it)", r.Source)
 	}
 	env.Logf("warning: %s: no packages in %s", key, r.Source)
 	return nil
 }
 
-func build(cfg *config.Config, env *publish.Env, allowEmpty bool) error {
+func build(cfg *config.Config, env *publish.Env) error {
 	if env.Signer != nil {
 		for _, armor := range []bool{true, false} {
 			key, err := env.Signer.PublicKey(armor)
@@ -193,7 +194,7 @@ func build(cfg *config.Config, env *publish.Env, allowEmpty bool) error {
 	}
 	// Check every repo first: the publish after this can take hours.
 	for _, r := range cfg.Repos {
-		if err := checkNotEmpty(r, env, allowEmpty); err != nil {
+		if err := checkNotEmpty(r, env); err != nil {
 			return fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
 		}
 	}

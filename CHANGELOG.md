@@ -40,20 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `crossdock systemd-config` generates the drop-ins and tmpfiles entry for a config whose paths
   aren't under `/var/lib/crossdock`: `ReadWritePaths`, the watched directories and
   `RequiresMountsFor`.
-- `crossdock publish -allow-empty` lets a repo that has packages go empty.
+- `allow_empty: true` on a repo lets it be published empty after it has had packages.
 
 ### Changed
 
 - **Packages are hardlinked into the store** when the source shares a file system with `output`,
   so they no longer take twice the space. Publish warns if it has to copy. Replace sources by
-  rename, not by writing into them.
+  rename, not by writing into them. A truncated store object is now replaced, not reused.
 - **A publish that's interrupted resumes.** Progress is saved every minute and on failure, and
-  `crossdock-publish.service` no longer has a 30-minute start timeout.
+  `crossdock-publish.service` no longer has a 30-minute start timeout. Releases left by a killed
+  publish no longer count towards `keep_releases`.
 - **A repo that has packages won't be published empty**, as an unmounted disk would make it look,
-  unless `-allow-empty` is given. Symlinked packages, once skipped silently, are published, and a
-  dangling one is an error.
+  unless it sets `allow_empty`. Symlinked packages, once skipped silently, now fail the publish.
 - `sign_packages` is off in the packaged config and example: it's unsuitable for large packages,
-  and the signed database covers package contents. pacman clients need
+  and a signed database covers package contents when clients require its signature. pacman clients
+  need
   `SigLevel = Required DatabaseRequired PackageOptional`.
 - `crossdock-publish.service` can write all of `/var/lib/crossdock`, not just `repo/`, because
   hardlinks can't cross the separate mounts `ReadWritePaths` makes. Both services now require

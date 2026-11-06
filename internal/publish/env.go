@@ -6,8 +6,8 @@ package publish
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,8 +26,8 @@ type Env struct {
 	Logf func(format string, args ...any)
 }
 
-// FindFiles returns files, and symlinks to files, under dir (recursively)
-// whose names end with any of the given suffixes, sorted.
+// FindFiles returns files under dir (recursively) whose names end with any
+// of the given suffixes, sorted. A matching symlink is an error.
 func FindFiles(dir string, suffixes ...string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -47,17 +47,12 @@ func FindFiles(dir string, suffixes ...string) ([]string, error) {
 			if !strings.HasSuffix(d.Name(), s) {
 				continue
 			}
-			// Symlinked packages count; a dangling link is an error, not
-			// a package that silently disappears from the repo.
+			// A symlink could point an upload at any file the publisher can
+			// read, and that file would end up in the world-readable store.
 			if d.Type()&fs.ModeSymlink != 0 {
-				fi, err := os.Stat(p)
-				if err != nil {
-					return err
-				}
-				if fi.Mode().IsRegular() {
-					out = append(out, p)
-				}
-			} else if d.Type().IsRegular() {
+				return fmt.Errorf("%s is a symlink: packages must be regular files (copy or hardlink it)", p)
+			}
+			if d.Type().IsRegular() {
 				out = append(out, p)
 			}
 			break

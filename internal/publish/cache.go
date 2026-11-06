@@ -5,6 +5,7 @@ package publish
 
 import (
 	"encoding/json"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -75,6 +76,13 @@ func (c *cache) entry(src string) *cacheEntry {
 	if !ok {
 		return nil
 	}
+	return c.entryAt(key, fi)
+}
+
+// entryAt is entry for a file identified by fi rather than its current
+// state, for callers that hold the file open: src may have been replaced
+// since, and a digest must stay with the file it was computed from.
+func (c *cache) entryAt(key string, fi os.FileInfo) *cacheEntry {
 	if e := c.fresh[key]; e != nil && e.Size == fi.Size() && e.ModTime == fi.ModTime().UnixNano() {
 		return e
 	}
@@ -93,9 +101,26 @@ func (c *cache) digest(src string) (Digest, bool) {
 	return Digest{}, false
 }
 
-func (c *cache) put(src string, d Digest) {
-	if e := c.entry(src); e != nil {
-		e.Digest = &d
+func (c *cache) digestFor(src string, fi os.FileInfo) (Digest, bool) {
+	if c == nil {
+		return Digest{}, false
+	}
+	key, err := filepath.Abs(src)
+	if err != nil {
+		return Digest{}, false
+	}
+	if e := c.entryAt(key, fi); e.Digest != nil {
+		return *e.Digest, true
+	}
+	return Digest{}, false
+}
+
+func (c *cache) putFor(src string, fi os.FileInfo, d Digest) {
+	if c == nil {
+		return
+	}
+	if key, err := filepath.Abs(src); err == nil {
+		c.entryAt(key, fi).Digest = &d
 	}
 }
 
@@ -147,11 +172,20 @@ func (r *Release) Digest(src string) (Digest, error) {
 	if d, ok := r.cache.digest(src); ok {
 		return d, nil
 	}
-	d, err := HashFile(src)
+	f, err := os.Open(src)
 	if err != nil {
 		return Digest{}, err
 	}
-	r.cache.put(src, d)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return Digest{}, err
+	}
+	d, err := hashReader(f, io.Discard)
+	if err != nil {
+		return Digest{}, err
+	}
+	r.cache.putFor(src, fi, d)
 	r.checkpoint()
 	return d, nil
 }

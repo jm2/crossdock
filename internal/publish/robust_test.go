@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,9 @@ func sameFile(t *testing.T, a, b string) bool {
 }
 
 func TestStoreHardlinksSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows always copies")
+	}
 	base := t.TempDir()
 	root, src := filepath.Join(base, "repo"), filepath.Join(base, "pkg.bin")
 	os.WriteFile(src, []byte("payload"), 0o644)
@@ -68,6 +72,9 @@ func TestStoreLinksDuplicateContent(t *testing.T) {
 }
 
 func TestStoreCopiesUnreadableSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits don't describe access on Windows")
+	}
 	base := t.TempDir()
 	root, src := filepath.Join(base, "repo"), filepath.Join(base, "pkg.bin")
 	os.WriteFile(src, []byte("private"), 0o600)
@@ -93,42 +100,66 @@ func TestStoreCopiesUnreadableSource(t *testing.T) {
 	}
 }
 
-func TestStoreFollowsSymlinkedSource(t *testing.T) {
-	base := t.TempDir()
-	root, real, link := filepath.Join(base, "repo"), filepath.Join(base, "real.bin"), filepath.Join(base, "link.bin")
-	os.WriteFile(real, []byte("payload"), 0o644)
-	if err := os.Symlink(real, link); err != nil {
-		t.Skip(err)
-	}
-	rel, _ := Begin(root, time.Unix(1000, 0))
-	d, err := rel.AddFile(link, "a/pkg.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sameFile(t, real, filepath.Join(root, storeDir, d.SHA256)) {
-		t.Error("store object isn't the symlink's target")
-	}
-	fi, err := os.Lstat(filepath.Join(root, storeDir, d.SHA256))
-	if err != nil || !fi.Mode().IsRegular() {
-		t.Errorf("store object is a symlink: %v %v", fi, err)
-	}
-}
-
 func TestFindFiles(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.pkg"), nil, 0o644)
 	os.WriteFile(filepath.Join(dir, ".b.pkg"), nil, 0o644)
 	os.WriteFile(filepath.Join(dir, "c.txt"), nil, 0o644)
+	got, err := FindFiles(dir, ".pkg")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("FindFiles = %v, %v", got, err)
+	}
 	if err := os.Symlink(filepath.Join(dir, "a.pkg"), filepath.Join(dir, "d.pkg")); err != nil {
 		t.Skip(err)
 	}
-	got, err := FindFiles(dir, ".pkg")
-	if err != nil || len(got) != 2 {
-		t.Fatalf("FindFiles = %v, %v; a symlink is a package", got, err)
+	if _, err := FindFiles(dir, ".pkg"); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("a symlinked package must be an error: %v", err)
 	}
-	os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dir, "e.pkg"))
-	if _, err := FindFiles(dir, ".pkg"); err == nil {
-		t.Error("a dangling symlink must be an error, not a missing package")
+}
+
+// A truncated store object, as a power cut can leave, must be replaced.
+func TestStoreReplacesDamagedObject(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode os.FileMode
+	}{{"link", 0o644}, {"copy", 0o600}} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			root, src := filepath.Join(base, "repo"), filepath.Join(base, "pkg.bin")
+			os.WriteFile(src, []byte("payload"), tc.mode)
+			rel, _ := Begin(root, time.Unix(1000, 0))
+			want := HashBytes([]byte("payload"))
+			obj := filepath.Join(root, storeDir, want.SHA256)
+			os.WriteFile(obj, nil, 0o644)
+			if _, err := rel.AddFile(src, "a/pkg.bin"); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(filepath.Join(rel.Dir, "a", "pkg.bin"))
+			if err != nil || string(got) != "payload" {
+				t.Errorf("published %q, %v", got, err)
+			}
+		})
+	}
+}
+
+// A digest stays with the file it was computed from: replacing src while
+// it's being hashed must not give the new file the old digest.
+func TestCacheKeepsDigestWithItsFile(t *testing.T) {
+	base := t.TempDir()
+	root, src := filepath.Join(base, "repo"), filepath.Join(base, "pkg.bin")
+	os.WriteFile(src, []byte("old-build"), 0o644)
+	rel, _ := Begin(root, time.Unix(1000, 0))
+	old, _ := os.Stat(src)
+	d := HashBytes([]byte("old-build"))
+
+	repl := src + ".new"
+	os.WriteFile(repl, []byte("new-build!"), 0o644)
+	os.Chtimes(repl, time.Now(), time.Now().Add(time.Hour))
+	os.Rename(repl, src)
+
+	rel.cache.putFor(src, old, d) // the hash of the old file finishes now
+	if got, ok := rel.cache.digest(src); ok && got.SHA256 == d.SHA256 {
+		t.Error("the old digest was recorded against the new file")
 	}
 }
 
@@ -218,21 +249,60 @@ func TestPruneRemovesStaleIncoming(t *testing.T) {
 	}
 }
 
-func TestPackageCounts(t *testing.T) {
+func TestPruneRemovesKilledReleases(t *testing.T) {
 	root := t.TempDir()
-	rel, _ := Begin(root, time.Unix(1000, 0))
-	if n := rel.PreviousPackageCount("arch/x"); n != 0 {
-		t.Errorf("first publish: previous count %d", n)
+	var good []string
+	for i := int64(0); i < 3; i++ {
+		rel, _ := Begin(root, time.Unix(1000+i, 0))
+		if err := rel.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		good = append(good, rel.ID)
 	}
-	rel.SetPackageCount("arch/x", 7)
+	var killed []string
+	for i := int64(0); i < 3; i++ {
+		rel, _ := Begin(root, time.Unix(2000+i, 0))
+		killed = append(killed, rel.ID)
+	}
+	rel, _ := Begin(root, time.Unix(3000, 0))
+	if err := rel.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prune(root, 3); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range killed {
+		if _, err := os.Stat(filepath.Join(root, releasesDir, id)); !os.IsNotExist(err) {
+			t.Errorf("killed release %s survived", id)
+		}
+	}
+	for _, id := range []string{rel.ID, good[2], good[1]} {
+		if _, err := os.Stat(filepath.Join(root, releasesDir, id)); err != nil {
+			t.Errorf("good release pushed out: %v", err)
+		}
+	}
+}
+
+func TestPreviousPackages(t *testing.T) {
+	base := t.TempDir()
+	root, src := filepath.Join(base, "repo"), filepath.Join(base, "a.pkg")
+	os.WriteFile(src, []byte("p"), 0o644)
+	rel, _ := Begin(root, time.Unix(1000, 0))
+	if n, err := rel.PreviousPackages("arch/x", ".pkg"); n != 0 || err != nil {
+		t.Errorf("first publish: %d, %v", n, err)
+	}
+	if _, err := rel.AddFile(src, "arch/x/x86_64/a.pkg"); err != nil {
+		t.Fatal(err)
+	}
 	if err := rel.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	rel2, _ := Begin(root, time.Unix(2000, 0))
-	if n := rel2.PreviousPackageCount("arch/x"); n != 7 {
-		t.Errorf("previous count %d, want 7", n)
+	defer rel2.Abort()
+	if n, err := rel2.PreviousPackages("arch/x", ".pkg"); n != 1 || err != nil {
+		t.Errorf("previous = %d, %v; want 1", n, err)
 	}
-	if n := rel2.PreviousPackageCount("rpm/x"); n != 0 {
-		t.Errorf("unknown repo count %d", n)
+	if n, err := rel2.PreviousPackages("rpm/x", ".pkg"); n != 0 || err != nil {
+		t.Errorf("unknown repo = %d, %v", n, err)
 	}
 }

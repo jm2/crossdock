@@ -51,10 +51,10 @@ sudo firewall-cmd --permanent --add-service=crossdock && sudo firewall-cmd --rel
 # 3. Upload. Use rsync (or copy to a dotfile and rename), so publish never
 #    reads a half-written file.
 sudo usermod -aG crossdock "$USER"     # log in again afterwards
-rsync -av *.deb nas:/var/lib/crossdock/incoming/deb/
-rsync -av *.pkg.tar.zst nas:/var/lib/crossdock/incoming/arch/
-rsync -av *.rpm nas:/var/lib/crossdock/incoming/rpm/
-rsync -av *.goo nas:/var/lib/crossdock/incoming/goo/
+rsync -av --no-g --chmod=F664 *.deb nas:/var/lib/crossdock/incoming/deb/
+rsync -av --no-g --chmod=F664 *.pkg.tar.zst nas:/var/lib/crossdock/incoming/arch/
+rsync -av --no-g --chmod=F664 *.rpm nas:/var/lib/crossdock/incoming/rpm/
+rsync -av --no-g --chmod=F664 *.goo nas:/var/lib/crossdock/incoming/goo/
 ```
 
 Clients then use `http://nas:8080/deb/local`,
@@ -115,8 +115,9 @@ once:
 - The file is world-readable, since `serve` runs as another account.
 - The publishing account owns the file or can write to it
   (`fs.protected_hardlinks`). Uploads into the packaged `incoming`
-  directories get group `crossdock`, so make them group-writable:
-  `rsync -av --chmod=F664`.
+  directories get group `crossdock`, so keep that group and make them
+  group-writable: `rsync -av --no-g --chmod=F664` (`--no-g` must follow
+  `-a`).
 
 A hardlinked store object is the same file as the source. Replace sources
 by rename, as rsync and `mv` do. Don't overwrite one in place (`cp` onto an
@@ -130,10 +131,12 @@ saved every minute and when a publish fails, so a publish that's stopped or
 killed picks up where it left off.
 
 An empty source is usually a storage problem, so a repo that has packages
-won't be published empty: publish fails and the current release stays live.
-If you really mean to empty it, run `crossdock publish -allow-empty`. A
-repo that has never had packages may stay empty. Symlinks to packages
-count as packages, and a dangling one fails the publish.
+won't be published empty: publish fails, for every repo, and the current
+release stays live. If you really mean to empty one, set `allow_empty: true`
+on that repo. A repo that has never had packages may stay empty.
+
+Packages must be regular files. A symlink fails the publish, because it
+could expose any file the publisher can read.
 
 ### Storing repos elsewhere
 
@@ -151,7 +154,12 @@ This sets the publisher's `ReadWritePaths` and the path unit's watched
 directories, adds `RequiresMountsFor` so the services wait for the disk, and
 creates the directories. Put `output` and the sources under one parent, such
 as `/media/data/crossdock/{repo,incoming/arch}`, so packages can be hardlinked.
-Rerun it whenever those paths change.
+That parent can't be a shared directory such as `/srv` or `/var/lib`, which
+would open too much to the publisher. Rerun it whenever those paths change.
+
+The disk must be in `/etc/fstab`, or `RequiresMountsFor` can't tell that it's
+missing. The empty-repo check can't help when `output` is on that disk too:
+with no previous release to compare with, it looks like a new repo.
 
 Config options worth knowing:
 
@@ -160,7 +168,8 @@ Config options worth knowing:
 | `no_symlinks: true` | In-release links become hardlinks or copies, and the current release goes in `<output>/current.id`. Use it for SMB shares, object-store syncs, or anything that won't follow links. `crossdock serve` handles either; static web servers need symlinks. Windows always publishes this way. |
 | `valid_for: 7d` (deb repos) | Adds `Valid-Until` to `Release`, so clients reject stale or replayed indexes. Enable `crossdock-publish.timer` so the repo is republished before it expires. |
 | `passphrase_file` (signing) | Reads the key's passphrase from a file, e.g. a systemd credential. |
-| `sign_packages: true` (arch repos) | Creates a `.sig` for each package without one. Off by default: the signed database already pins every package's SHA-256. It holds each package in memory and re-signs them all on every publish, so don't use it with multi-GiB packages. |
+| `allow_empty: true` (any repo) | Lets a repo that has packages be published empty. See [Large repos](#large-repos). |
+| `sign_packages: true` (arch repos) | Creates a `.sig` for each package without one. Off by default: with a signing key and clients requiring database signatures (`DatabaseRequired`), the database pins every package's SHA-256. It holds each package in memory and re-signs them all on every publish, so don't use it with multi-GiB packages. |
 | `gnupg_home` + `key_id` (signing) | Signs through `gpg` with an existing keyring instead of `key_file`, for gpg-agent and smartcard keys. This is the only feature that needs `gpg` installed. |
 
 apt repos always set `Acquire-By-Hash: yes` and keep the previous
@@ -233,8 +242,8 @@ SigLevel = Required DatabaseRequired PackageOptional
 Server = https://repo.example/arch/$repo/$arch
 ```
 
-The database signature covers every package's SHA-256. `PackageOptional` is
-needed unless packages carry their own signatures (`sign_packages`, or
+The trusted database signature covers every package's SHA-256, which is why
+`DatabaseRequired` matters here. `PackageOptional` is needed unless packages carry their own signatures (`sign_packages`, or
 `makepkg --sign`).
 
 dnf (`/etc/yum.repos.d/jm2.repo`). One RPM repo holds every architecture,

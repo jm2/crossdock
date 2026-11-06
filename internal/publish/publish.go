@@ -16,7 +16,6 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -41,7 +40,10 @@ const (
 	// generated nginx config never expose dot paths.
 	metaDir      = ".crossdock"
 	manifestName = "store-objects"
-	countsName   = "package-counts.json"
+	// inProgressName marks a release until it's committed. A publish that
+	// was killed leaves it behind, which is how Prune knows the release
+	// was never live.
+	inProgressName = "in-progress"
 	// incomingPrefix names store files still being added. A publish that
 	// was killed can leave them behind; the next successful one removes them.
 	incomingPrefix = ".incoming-"
@@ -111,8 +113,6 @@ type Release struct {
 	// objects are the store digests this release links to.
 	objects map[string]bool
 	cache   *cache
-	// counts holds each repo's package count, kept for the next publish.
-	counts map[string]int
 	// lastSave is when the metadata cache was last written (see checkpoint).
 	lastSave time.Time
 	// copyWarned is set once Logf has reported a failed hardlink.
@@ -151,10 +151,16 @@ func Begin(root string, now time.Time) (*Release, error) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return nil, err
 	}
+	if err := os.Mkdir(filepath.Join(dir, metaDir), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, metaDir, inProgressName), nil, 0o644); err != nil {
+		return nil, err
+	}
 	return &Release{
 		root: root, ID: id, Dir: dir, prev: Current(root),
 		objects: map[string]bool{}, cache: loadCache(root),
-		counts: map[string]int{}, lastSave: time.Now(),
+		lastSave: time.Now(),
 		// Windows can't atomically rename a symlink over the existing
 		// current symlink ("Access is denied"), even where it can create
 		// symlinks, so it always publishes with current.id.
@@ -311,8 +317,7 @@ func (r *Release) AddFile(src, rel string) (Digest, error) {
 func (r *Release) store(src string) (Digest, string, error) {
 	// Unchanged since the last publish and already stored: no read at all.
 	if d, ok := r.cache.digest(src); ok {
-		obj := filepath.Join(r.root, storeDir, d.SHA256)
-		if fi, err := os.Stat(obj); err == nil && fi.Size() == d.Size {
+		if obj := filepath.Join(r.root, storeDir, d.SHA256); intact(obj, d) {
 			return d, obj, nil
 		}
 	}
@@ -328,22 +333,29 @@ func (r *Release) store(src string) (Digest, string, error) {
 		return Digest{}, "", err
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return Digest{}, "", err
+	}
 	tmp, err := os.CreateTemp(filepath.Join(r.root, storeDir), incomingPrefix+"*")
 	if err != nil {
 		return Digest{}, "", err
 	}
 	defer os.Remove(tmp.Name())
 	d, err = hashReader(f, tmp)
+	if err == nil {
+		err = tmp.Sync()
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return Digest{}, "", err
 	}
-	r.cache.put(src, d)
+	r.cache.putFor(src, fi, d)
 	r.checkpoint()
 	obj = filepath.Join(r.root, storeDir, d.SHA256)
-	if _, err := os.Stat(obj); err == nil {
+	if intact(obj, d) {
 		return d, obj, nil
 	}
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
@@ -362,14 +374,25 @@ func (r *Release) store(src string) (Digest, string, error) {
 // instead: the file systems differ, the kernel refuses (with
 // fs.protected_hardlinks, the publishing account needs write access to src
 // or must own it), or src isn't world-readable, which can't be changed here
-// without changing the source file too.
+// without changing the source file too. Windows always copies: a link
+// would keep the source's ACL, which its mode bits don't describe.
 func (r *Release) linkIn(src string) (d Digest, obj string, linked bool, err error) {
-	// link(2) doesn't follow symlinks, and sources may be symlinks.
-	real, err := filepath.EvalSymlinks(src)
-	if err != nil {
-		return Digest{}, "", false, err
+	if runtime.GOOS == "windows" {
+		return Digest{}, "", false, nil
 	}
-	fi, err := os.Stat(real)
+	if fi, err := os.Lstat(src); err != nil {
+		return Digest{}, "", false, err
+	} else if !fi.Mode().IsRegular() {
+		return Digest{}, "", false, nil
+	}
+	tmp := filepath.Join(r.root, storeDir, incomingPrefix+r.ID+"-"+strconv.Itoa(len(r.objects)))
+	if err := os.Link(src, tmp); err != nil {
+		r.warnCopy(err)
+		return Digest{}, "", false, nil
+	}
+	defer os.Remove(tmp)
+	// From here on, tmp is the inode being stored even if src is replaced.
+	fi, err := os.Stat(tmp)
 	if err != nil {
 		return Digest{}, "", false, err
 	}
@@ -377,28 +400,29 @@ func (r *Release) linkIn(src string) (d Digest, obj string, linked bool, err err
 		r.warnCopy(fmt.Errorf("%s is not world-readable", src))
 		return Digest{}, "", false, nil
 	}
-	tmp := filepath.Join(r.root, storeDir, incomingPrefix+r.ID+"-"+strconv.Itoa(len(r.objects)))
-	if err := os.Link(real, tmp); err != nil {
-		r.warnCopy(err)
-		return Digest{}, "", false, nil
-	}
-	defer os.Remove(tmp)
-	d, ok := r.cache.digest(src)
+	d, ok := r.cache.digestFor(src, fi)
 	if !ok {
 		if d, err = HashFile(tmp); err != nil {
 			return Digest{}, "", false, err
 		}
-		r.cache.put(src, d)
+		r.cache.putFor(src, fi, d)
 		r.checkpoint()
 	}
 	obj = filepath.Join(r.root, storeDir, d.SHA256)
-	if _, err := os.Stat(obj); err == nil {
+	if intact(obj, d) {
 		return d, obj, true, nil
 	}
 	if err := os.Rename(tmp, obj); err != nil {
 		return Digest{}, "", false, err
 	}
 	return d, obj, true, nil
+}
+
+// intact reports whether store object obj exists with d's size. A power cut
+// can leave one truncated; a damaged object must be replaced, not reused.
+func intact(obj string, d Digest) bool {
+	fi, err := os.Stat(obj)
+	return err == nil && fi.Size() == d.Size
 }
 
 // warnCopy reports, once per publish, that packages are being copied into
@@ -411,24 +435,19 @@ func (r *Release) warnCopy(err error) {
 	r.Logf("warning: copying packages into the store, not hardlinking (%v); see README, Disk use", err)
 }
 
-// SetPackageCount records how many packages repo key has in this release.
-func (r *Release) SetPackageCount(key string, n int) { r.counts[key] = n }
-
-// PreviousPackageCount returns how many packages repo key had in the release
-// that was current when this one began, or 0 if that isn't known.
-func (r *Release) PreviousPackageCount(key string) int {
-	if r.prev == "" {
-		return 0
+// PreviousPackages counts the files named with suffixes under rel in the
+// release that was current when this one began. It looks at the release
+// itself, so it works for releases from any version of crossdock.
+func (r *Release) PreviousPackages(rel string, suffixes ...string) (int, error) {
+	dir, ok := r.Previous(rel)
+	if !ok {
+		return 0, nil
 	}
-	b, err := os.ReadFile(filepath.Join(r.root, releasesDir, r.prev, metaDir, countsName))
-	if err != nil {
-		return 0
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return 0, nil
 	}
-	var counts map[string]int
-	if json.Unmarshal(b, &counts) != nil {
-		return 0
-	}
-	return counts[key]
+	files, err := FindFiles(dir, suffixes...)
+	return len(files), err
 }
 
 func copyFile(src, dst string) error {
@@ -471,6 +490,9 @@ func (r *Release) Commit() error {
 		return err
 	}
 	if err := r.cache.save(r.root); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(r.Dir, metaDir, inProgressName)); err != nil {
 		return err
 	}
 	tmp := filepath.Join(r.root, "."+currentLink+".tmp")
@@ -566,13 +588,6 @@ func (r *Release) writeManifest() error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	counts, err := json.Marshal(r.counts)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, countsName), counts, 0o644); err != nil {
-		return err
-	}
 	return os.WriteFile(filepath.Join(dir, manifestName), []byte(strings.Join(ids, "\n")+"\n"), 0o644)
 }
 
@@ -606,16 +621,26 @@ func Prune(root string, keep int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	cur := Current(root)
+	var ids, removed []string
 	for _, e := range entries {
-		if e.IsDir() {
-			ids = append(ids, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		dir := filepath.Join(root, releasesDir, e.Name())
+		// A killed publish never went live: it doesn't count as a release,
+		// so it can't push a good one out.
+		if _, err := os.Stat(filepath.Join(dir, metaDir, inProgressName)); err == nil && e.Name() != cur {
+			if err := os.RemoveAll(dir); err != nil {
+				return removed, err
+			}
+			removed = append(removed, e.Name())
+			continue
+		}
+		ids = append(ids, e.Name())
 	}
 	// IDs start with a UTC timestamp, so lexical order is chronological.
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
-	cur := Current(root)
-	var removed []string
 	kept := 0
 	for _, id := range ids {
 		if id == cur || kept < keep {
