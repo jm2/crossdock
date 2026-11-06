@@ -314,7 +314,28 @@ func (r *Release) AddFile(src, rel string) (Digest, error) {
 	return d, nil
 }
 
+// AddVerified is AddFile for a package whose digest is already in an index.
+// It fails if src has changed since then: the signed index would describe a
+// different file from the one stored. The next publish picks up the change.
+func (r *Release) AddVerified(src, rel string, want Digest) error {
+	d, err := r.AddFile(src, rel)
+	if err != nil {
+		return err
+	}
+	if d.SHA256 != want.SHA256 {
+		return fmt.Errorf("%s changed during the publish", src)
+	}
+	return nil
+}
+
 func (r *Release) store(src string) (Digest, string, error) {
+	// FindFiles refused symlinks, but src may have been replaced since.
+	// Copying one would put its target in the world-readable store.
+	if fi, err := os.Lstat(src); err != nil {
+		return Digest{}, "", err
+	} else if !fi.Mode().IsRegular() {
+		return Digest{}, "", fmt.Errorf("%s is not a regular file", src)
+	}
 	// Unchanged since the last publish and already stored: no read at all.
 	if d, ok := r.cache.digest(src); ok {
 		if obj := filepath.Join(r.root, storeDir, d.SHA256); intact(obj, d) {
@@ -380,11 +401,6 @@ func (r *Release) linkIn(src string) (d Digest, obj string, linked bool, err err
 	if runtime.GOOS == "windows" {
 		return Digest{}, "", false, nil
 	}
-	if fi, err := os.Lstat(src); err != nil {
-		return Digest{}, "", false, err
-	} else if !fi.Mode().IsRegular() {
-		return Digest{}, "", false, nil
-	}
 	tmp := filepath.Join(r.root, storeDir, incomingPrefix+r.ID+"-"+strconv.Itoa(len(r.objects)))
 	if err := os.Link(src, tmp); err != nil {
 		r.warnCopy(err)
@@ -412,10 +428,24 @@ func (r *Release) linkIn(src string) (d Digest, obj string, linked bool, err err
 	if intact(obj, d) {
 		return d, obj, true, nil
 	}
+	// Uploads aren't necessarily on disk yet, and metadata for this file is
+	// about to be published.
+	if err := syncFile(tmp); err != nil {
+		return Digest{}, "", false, err
+	}
 	if err := os.Rename(tmp, obj); err != nil {
 		return Digest{}, "", false, err
 	}
 	return d, obj, true, nil
+}
+
+func syncFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // intact reports whether store object obj exists with d's size. A power cut
@@ -566,6 +596,10 @@ func writeAtomic(path string, data []byte) error {
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return err
 	}

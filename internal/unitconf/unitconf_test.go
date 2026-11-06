@@ -116,3 +116,23 @@ func TestWrite(t *testing.T) {
 		t.Errorf("temporary files left: %v", left)
 	}
 }
+
+func TestRejectsSandboxedPaths(t *testing.T) {
+	for _, p := range []string{"/home/jm/repo", "/tmp/repo", "/var/tmp/repo", "/root/repo"} {
+		if _, err := Generate(cfg(p, "/srv/a/in")); err == nil {
+			t.Errorf("%s must be refused", p)
+		}
+	}
+}
+
+func TestGnuPGHomeStaysWritable(t *testing.T) {
+	c := cfg("/srv/a/repo", "/srv/a/in")
+	c.Signing = &config.Signing{GnuPGHome: "/var/lib/crossdock/gnupg"}
+	files, err := Generate(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub := find(t, files, "publish.service.d"); !strings.Contains(pub, "ReadWritePaths=/var/lib/crossdock/gnupg\n") {
+		t.Errorf("gpg can't lock its home:\n%s", pub)
+	}
+}

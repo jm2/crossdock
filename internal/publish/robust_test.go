@@ -306,3 +306,36 @@ func TestPreviousPackages(t *testing.T) {
 		t.Errorf("unknown repo = %d, %v", n, err)
 	}
 }
+
+func TestAddVerifiedDetectsChange(t *testing.T) {
+	base := t.TempDir()
+	src := filepath.Join(base, "pkg.bin")
+	os.WriteFile(src, []byte("old"), 0o644)
+	rel, _ := Begin(filepath.Join(base, "repo"), time.Unix(1000, 0))
+	indexed, err := rel.Digest(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rel.AddVerified(src, "a/ok", indexed); err != nil {
+		t.Fatal(err)
+	}
+	repl := src + ".new"
+	os.WriteFile(repl, []byte("newer"), 0o644)
+	os.Rename(repl, src)
+	if err := rel.AddVerified(src, "a/changed", indexed); err == nil {
+		t.Error("a package replaced mid-publish must fail, not mismatch its index")
+	}
+}
+
+func TestStoreRefusesSymlink(t *testing.T) {
+	base := t.TempDir()
+	real, link := filepath.Join(base, "private"), filepath.Join(base, "pkg.bin")
+	os.WriteFile(real, []byte("secret"), 0o644)
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	rel, _ := Begin(filepath.Join(base, "repo"), time.Unix(1000, 0))
+	if _, err := rel.AddFile(link, "a/pkg.bin"); err == nil {
+		t.Error("a symlink must not reach the store")
+	}
+}

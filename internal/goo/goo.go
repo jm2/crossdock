@@ -209,7 +209,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 			}
 			return fmt.Errorf("%s and %s are both %s with different contents", prev.pkg.Path, f, key)
 		}
-		if _, err := env.Release.AddFile(f, path.Join(root, rel)); err != nil {
+		if err := env.Release.AddVerified(f, path.Join(root, rel), d); err != nil {
 			return err
 		}
 		e := &entry{pkg: pkg, rs: repoSpec{

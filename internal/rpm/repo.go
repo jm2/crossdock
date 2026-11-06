@@ -76,7 +76,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 			href:  path.Join("Packages", strings.ToLower(name[:1]), name),
 			mtime: fi.ModTime().Unix(),
 		}
-		if _, err := env.Release.AddFile(f, path.Join(root, e.href)); err != nil {
+		if err := env.Release.AddVerified(f, path.Join(root, e.href), d); err != nil {
 			return err
 		}
 		e.digest = d

@@ -116,6 +116,9 @@ func cmdPublish(args []string) error {
 		return errors.New("no signing key configured; add \"signing\" or pass -allow-unsigned")
 	}
 
+	if err := publish.Lock(cfg.Output, logf); err != nil {
+		return err
+	}
 	rel, err := publish.Begin(cfg.Output, now)
 	if err != nil {
 		return err
@@ -172,7 +175,9 @@ func checkNotEmpty(r config.Repo, env *publish.Env) error {
 	if prev > 0 && !r.AllowEmpty {
 		return fmt.Errorf("%s is empty but the published repo has packages; is the disk mounted? (set allow_empty: true on this repo to empty it)", r.Source)
 	}
-	env.Logf("warning: %s: no packages in %s", key, r.Source)
+	if prev > 0 {
+		env.Logf("warning: %s: emptying the repo (allow_empty)", key)
+	}
 	return nil
 }
 
@@ -199,6 +204,10 @@ func build(cfg *config.Config, env *publish.Env) error {
 		}
 	}
 	for _, r := range cfg.Repos {
+		// Again, as earlier repos can take hours and disks can go away.
+		if err := checkNotEmpty(r, env); err != nil {
+			return fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
+		}
 		var err error
 		switch r.Format {
 		case config.FormatDeb:

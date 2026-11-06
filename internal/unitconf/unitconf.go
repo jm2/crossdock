@@ -41,6 +41,16 @@ func Generate(c *config.Config) ([]File, error) {
 		}
 	}
 	all := append([]string{c.Output}, sources...)
+	if c.Signing != nil && c.Signing.GnuPGHome != "" {
+		all = append(all, c.Signing.GnuPGHome)
+	}
+	for _, p := range all {
+		for _, hidden := range sandboxed {
+			if p == hidden || strings.HasPrefix(p, hidden+"/") {
+				return nil, fmt.Errorf("%s: the packaged services can't see %s; use another location", p, hidden)
+			}
+		}
+	}
 
 	var watch, tmp strings.Builder
 	watch.WriteString(header + "[Path]\nPathChanged=\n")
@@ -60,6 +70,9 @@ func Generate(c *config.Config) ([]File, error) {
 		publish += "# " + esc(s) + " isn't under the path below, so its packages are copied, not hardlinked.\n"
 	}
 	publish += "[Unit]\nRequiresMountsFor=" + mounts + "\n\n[Service]\nReadWritePaths=\nReadWritePaths=" + esc(dir) + "\n"
+	if c.Signing != nil && c.Signing.GnuPGHome != "" {
+		publish += "ReadWritePaths=" + esc(c.Signing.GnuPGHome) + "\n" // gpg writes its lock files there
+	}
 	return []File{
 		{"/etc/systemd/system/crossdock-publish.service.d/10-paths.conf", publish},
 		{"/etc/systemd/system/crossdock-publish.path.d/10-paths.conf", watch.String()},
@@ -68,6 +81,9 @@ func Generate(c *config.Config) ([]File, error) {
 		{"/etc/tmpfiles.d/crossdock-paths.conf", tmp.String()},
 	}, nil
 }
+
+// sandboxed lists directories the units hide (ProtectHome, PrivateTmp).
+var sandboxed = []string{"/home", "/root", "/run/user", "/tmp", "/var/tmp"}
 
 // tooBroad lists shared directories that are never opened to the publisher,
 // besides anything less than two levels deep.

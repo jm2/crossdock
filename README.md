@@ -121,7 +121,12 @@ once:
 
 A hardlinked store object is the same file as the source. Replace sources
 by rename, as rsync and `mv` do. Don't overwrite one in place (`cp` onto an
-existing file): that changes what's already published.
+existing file): that changes what's already published. It also means anyone
+who can write to `incoming` can change published packages, so only give
+trusted accounts upload access. Clients that verify signatures reject a
+changed package.
+
+Run one publish at a time per `output`: a second one waits for the first.
 
 ### Large repos
 
@@ -135,12 +140,13 @@ won't be published empty: publish fails, for every repo, and the current
 release stays live. If you really mean to empty one, set `allow_empty: true`
 on that repo. A repo that has never had packages may stay empty.
 
-Packages must be regular files. A symlink fails the publish, because it
-could expose any file the publisher can read.
+Packages and their `.sig` files must be regular files. A symlink fails the
+publish, because it could expose any file the publisher can read.
 
 ### Storing repos elsewhere
 
-`output` and each repo's `source` can be anywhere. The packaged units,
+`output` and each repo's `source` can be anywhere the sandboxed services can
+see, so not under `/home`, `/root`, `/run/user`, `/tmp` or `/var/tmp`. The packaged units,
 path watch and tmpfiles entry assume `/var/lib/crossdock`, so after pointing
 the config somewhere else, generate matching overrides:
 

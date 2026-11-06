@@ -56,9 +56,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 				prev.pkg.Path, f, pkg.Name(), pkg.Arch())
 		}
 		e := &entry{pkg: pkg, file: filepath.Base(f), digest: d}
-		if sig, err := os.ReadFile(f + ".sig"); err == nil {
-			e.sig = sig
-		} else if !os.IsNotExist(err) {
+		if e.sig, err = readSig(f + ".sig"); err != nil {
 			return err
 		}
 		if e.sig == nil && repo.SignPackages && env.Signer != nil {
@@ -99,7 +97,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 			}
 		}
 		for _, e := range sel {
-			if _, err := env.Release.AddFile(e.pkg.Path, path.Join(dir, e.file)); err != nil {
+			if err := env.Release.AddVerified(e.pkg.Path, path.Join(dir, e.file), e.digest); err != nil {
 				return err
 			}
 			if e.sig != nil {
@@ -228,4 +226,21 @@ func desc(e *entry) []byte {
 	section("MAKEDEPENDS", p.Info["makedepend"]...)
 	section("CHECKDEPENDS", p.Info["checkdepend"]...)
 	return []byte(b.String())
+}
+
+// readSig reads a package's detached signature, if it has one. A symlink is
+// an error: it could publish any file the publisher can read, signing key
+// included.
+func readSig(path string) ([]byte, error) {
+	fi, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return os.ReadFile(path)
 }
