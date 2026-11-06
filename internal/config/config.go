@@ -89,6 +89,10 @@ type Repo struct {
 	// packages (deb "all", pacman "any") are placed in every one. If empty,
 	// the concrete architectures found in Source are used.
 	Architectures []string `yaml:"architectures,omitempty"`
+	// AllowEmpty lets this repo be published with no packages after it has
+	// had some. Without it, an empty source fails the publish, because
+	// that usually means an unmounted disk.
+	AllowEmpty bool `yaml:"allow_empty,omitempty"`
 
 	// deb
 	Suite       string `yaml:"suite,omitempty"`
@@ -104,6 +108,12 @@ type Repo struct {
 
 	// arch
 	// SignPackages creates detached .sig files for packages that lack one.
+	// Off by default: with a signing key configured and clients requiring
+	// a trusted database signature (DatabaseRequired), the database pins
+	// every package's SHA-256. It holds each unsigned package in memory and
+	// re-signs them all on every publish, so leave it off for multi-GiB
+	// packages, and sign at build time (makepkg --sign) if clients need
+	// package signatures.
 	SignPackages bool `yaml:"sign_packages,omitempty"`
 }
 

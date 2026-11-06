@@ -87,7 +87,6 @@ repos:
     format: arch
     source: /srv/incoming/arch
     architectures: [x86_64, aarch64]     # "any" packages land in each
-    sign_packages: true                  # create missing .sig files
   - name: jm2
     format: deb
     source: /srv/incoming/deb

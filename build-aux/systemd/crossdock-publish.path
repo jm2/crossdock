@@ -1,11 +1,7 @@
 # Republishes when packages are added to, removed from or renamed in the
 # incoming directories. It watches only these directories, not their
-# subdirectories. If you point the config somewhere else, override the
-# paths with `systemctl edit crossdock-publish.path`:
-#
-#   [Path]
-#   PathChanged=
-#   PathChanged=/srv/packages/deb
+# subdirectories. If you point the config somewhere else, run
+# `sudo crossdock systemd-config -root /` to override these paths.
 #
 #   sudo systemctl enable --now crossdock-publish.path
 [Unit]

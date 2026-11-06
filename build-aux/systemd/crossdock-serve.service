@@ -19,6 +19,7 @@ Documentation=https://github.com/jm2/crossdock
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/crossdock/crossdock.yaml
+RequiresMountsFor=/var/lib/crossdock
 
 [Service]
 ExecStart=@CROSSDOCK@ serve -c /etc/crossdock/crossdock.yaml

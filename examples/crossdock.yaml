@@ -1,5 +1,5 @@
 # crossdock configuration. See README.md for every option.
-output: /srv/crossdock
+output: /srv/crossdock/repo
 keep_releases: 3
 
 signing:
@@ -9,13 +9,12 @@ signing:
 repos:
   - name: jm2
     format: arch
-    source: /srv/incoming/arch
+    source: /srv/crossdock/incoming/arch
     architectures: [x86_64, aarch64]     # "any" packages land in each
-    sign_packages: true                  # create missing .sig files
 
   - name: jm2
     format: deb
-    source: /srv/incoming/deb
+    source: /srv/crossdock/incoming/deb
     suite: stable
     component: main
     architectures: [amd64, arm64]        # "all" packages land in each

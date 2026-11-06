@@ -30,6 +30,7 @@ import (
 	"github.com/jm2/crossdock/internal/rpm"
 	"github.com/jm2/crossdock/internal/serve"
 	"github.com/jm2/crossdock/internal/sign"
+	"github.com/jm2/crossdock/internal/unitconf"
 )
 
 // version is stamped at build time with
@@ -42,6 +43,7 @@ commands:
   publish       build all configured repos into a new release and swap it in
   serve         serve the current release over HTTP (read-only)
   nginx-config  print an nginx server block matching serve's behaviour
+  systemd-config  write systemd drop-ins that match the config's paths
   inspect       print the metadata crossdock reads from package files
   keygen        create a signing key (Ed25519) for publish
   version       print the version
@@ -64,6 +66,8 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "nginx-config":
 		err = cmdNginx(os.Args[2:])
+	case "systemd-config":
+		err = cmdSystemd(os.Args[2:])
 	case "keygen":
 		err = cmdKeygen(os.Args[2:])
 	case "version", "--version", "-v":
@@ -112,11 +116,15 @@ func cmdPublish(args []string) error {
 		return errors.New("no signing key configured; add \"signing\" or pass -allow-unsigned")
 	}
 
+	if err := publish.Lock(cfg.Output, logf); err != nil {
+		return err
+	}
 	rel, err := publish.Begin(cfg.Output, now)
 	if err != nil {
 		return err
 	}
 	env.Release = rel
+	rel.Logf = log.Printf // warnings still show with -q
 	if cfg.NoSymlinks {
 		rel.NoSymlinks()
 	}
@@ -136,6 +144,43 @@ func cmdPublish(args []string) error {
 	return err
 }
 
+// checkNotEmpty refuses to empty a repo that has packages. An empty source
+// is usually a storage problem, such as an unmounted disk, and publishing it
+// would take the packages away from every client. A repo that has never had
+// packages may stay empty, and allow_empty lets one be emptied on purpose.
+func checkNotEmpty(r config.Repo, env *publish.Env) error {
+	var suffixes []string
+	switch r.Format {
+	case config.FormatDeb:
+		suffixes = []string{".deb"}
+	case config.FormatArch:
+		suffixes = archpkg.Suffixes
+	case config.FormatRPM:
+		suffixes = rpm.Suffixes
+	case config.FormatGoo:
+		suffixes = goo.Suffixes
+	}
+	files, err := publish.FindFiles(r.Source, suffixes...)
+	if err != nil {
+		return err
+	}
+	if len(files) > 0 {
+		return nil
+	}
+	key := string(r.Format) + "/" + r.Name
+	prev, err := env.Release.PreviousPackages(key, suffixes...)
+	if err != nil {
+		return err
+	}
+	if prev > 0 && !r.AllowEmpty {
+		return fmt.Errorf("%s is empty but the published repo has packages; is the disk mounted? (set allow_empty: true on this repo to empty it)", r.Source)
+	}
+	if prev > 0 {
+		env.Logf("warning: %s: emptying the repo (allow_empty)", key)
+	}
+	return nil
+}
+
 func build(cfg *config.Config, env *publish.Env) error {
 	if env.Signer != nil {
 		for _, armor := range []bool{true, false} {
@@ -152,7 +197,17 @@ func build(cfg *config.Config, env *publish.Env) error {
 			}
 		}
 	}
+	// Check every repo first: the publish after this can take hours.
 	for _, r := range cfg.Repos {
+		if err := checkNotEmpty(r, env); err != nil {
+			return fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
+		}
+	}
+	for _, r := range cfg.Repos {
+		// Again, as earlier repos can take hours and disks can go away.
+		if err := checkNotEmpty(r, env); err != nil {
+			return fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
+		}
 		var err error
 		switch r.Format {
 		case config.FormatDeb:
@@ -318,6 +373,29 @@ func cmdNginx(args []string) error {
 		return err
 	}
 	return serve.WriteNginx(os.Stdout, serve.NginxOptions{Output: out, Listen: *listen, ServerName: *name, Index: *index})
+}
+
+func cmdSystemd(args []string) error {
+	fs := flag.NewFlagSet("systemd-config", flag.ExitOnError)
+	cfgPath := fs.String("c", "/etc/crossdock/crossdock.yaml", "config file")
+	root := fs.String("root", "", "write the files under this directory, e.g. / (default: print them)")
+	fs.Parse(args)
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	files, err := unitconf.Generate(cfg)
+	if err != nil {
+		return err
+	}
+	if *root == "" {
+		for _, f := range files {
+			fmt.Printf("### %s\n%s\n", f.Path, f.Content)
+		}
+		return nil
+	}
+	return unitconf.Write(*root, files)
 }
 
 func cmdKeygen(args []string) error {

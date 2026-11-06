@@ -173,3 +173,19 @@ func TestPublishRejectsTwoVersions(t *testing.T) {
 		t.Fatalf("err = %v, want duplicate error", err)
 	}
 }
+
+func TestReadSigRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	if sig, err := readSig(filepath.Join(dir, "none.sig")); sig != nil || err != nil {
+		t.Errorf("missing signature: %q, %v", sig, err)
+	}
+	secret := filepath.Join(dir, "signing.asc")
+	os.WriteFile(secret, []byte("secret"), 0o600)
+	link := filepath.Join(dir, "a.pkg.tar.zst.sig")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skip(err)
+	}
+	if sig, err := readSig(link); err == nil || sig != nil {
+		t.Errorf("a symlinked signature must be refused: %q, %v", sig, err)
+	}
+}

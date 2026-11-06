@@ -20,6 +20,7 @@ Description=crossdock: publish package repositories
 Documentation=https://github.com/jm2/crossdock
 ConditionPathExists=/etc/crossdock/crossdock.yaml
 ConditionPathExists=/etc/crossdock/signing.asc
+RequiresMountsFor=/var/lib/crossdock
 
 [Service]
 Type=oneshot
@@ -31,10 +32,15 @@ Group=crossdock
 ExecStartPre=/usr/bin/sleep 5
 ExecStart=@CROSSDOCK@ publish -c /etc/crossdock/crossdock.yaml
 LoadCredential=signing.asc:/etc/crossdock/signing.asc
-TimeoutStartSec=30min
+# The first publish of a large repo reads every package, which can take
+# hours. It saves its progress, so stopping it loses little.
+TimeoutStartSec=infinity
 
 UMask=0022
-ReadWritePaths=/var/lib/crossdock/repo
+# All of /var/lib/crossdock, not just repo/: each ReadWritePaths entry is a
+# separate mount, and packages can't be hardlinked from incoming/ to the
+# store across mounts. `crossdock systemd-config` handles other locations.
+ReadWritePaths=/var/lib/crossdock
 # Publishing needs no network. Signing is native; AF_UNIX is left for a
 # gnupg_home key, where gpg talks to its agent over a Unix socket.
 PrivateNetwork=yes

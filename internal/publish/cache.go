@@ -5,8 +5,11 @@ package publish
 
 import (
 	"encoding/json"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // The cache remembers, for each source package file, its digest and the
@@ -19,6 +22,10 @@ const (
 	cacheFile    = "cache.json"
 	cacheVersion = 1
 )
+
+// checkpointEvery limits how often a publish saves its progress. It's a
+// variable so tests can shorten it.
+var checkpointEvery = time.Minute
 
 type cacheEntry struct {
 	Size    int64                      `json:"size"`
@@ -69,6 +76,13 @@ func (c *cache) entry(src string) *cacheEntry {
 	if !ok {
 		return nil
 	}
+	return c.entryAt(key, fi)
+}
+
+// entryAt is entry for a file identified by fi rather than its current
+// state, for callers that hold the file open: src may have been replaced
+// since, and a digest must stay with the file it was computed from.
+func (c *cache) entryAt(key string, fi os.FileInfo) *cacheEntry {
 	if e := c.fresh[key]; e != nil && e.Size == fi.Size() && e.ModTime == fi.ModTime().UnixNano() {
 		return e
 	}
@@ -87,9 +101,26 @@ func (c *cache) digest(src string) (Digest, bool) {
 	return Digest{}, false
 }
 
-func (c *cache) put(src string, d Digest) {
-	if e := c.entry(src); e != nil {
-		e.Digest = &d
+func (c *cache) digestFor(src string, fi os.FileInfo) (Digest, bool) {
+	if c == nil {
+		return Digest{}, false
+	}
+	key, err := filepath.Abs(src)
+	if err != nil {
+		return Digest{}, false
+	}
+	if e := c.entryAt(key, fi); e.Digest != nil {
+		return *e.Digest, true
+	}
+	return Digest{}, false
+}
+
+func (c *cache) putFor(src string, fi os.FileInfo, d Digest) {
+	if c == nil {
+		return
+	}
+	if key, err := filepath.Abs(src); err == nil {
+		c.entryAt(key, fi).Digest = &d
 	}
 }
 
@@ -97,12 +128,42 @@ func (c *cache) save(root string) error {
 	if c == nil {
 		return nil
 	}
-	out := cache{Version: cacheVersion, Entries: c.fresh}
-	b, err := json.Marshal(out)
+	return c.write(root, c.fresh)
+}
+
+// saveProgress is save for an unfinished publish: it keeps entries this
+// publish hasn't reached yet, so stopping early can't lose earlier work.
+func (c *cache) saveProgress(root string) error {
+	if c == nil {
+		return nil
+	}
+	all := make(map[string]*cacheEntry, len(c.Entries)+len(c.fresh))
+	maps.Copy(all, c.Entries)
+	maps.Copy(all, c.fresh)
+	return c.write(root, all)
+}
+
+func (c *cache) write(root string, entries map[string]*cacheEntry) error {
+	b, err := json.Marshal(cache{Version: cacheVersion, Entries: entries})
 	if err != nil {
 		return err
 	}
 	return writeAtomic(filepath.Join(root, cacheFile), b)
+}
+
+// checkpoint saves the cache at most once per checkpointEvery. Reading a
+// large repo for the first time can take hours, and without this a killed
+// publish would start over from nothing: finished packages stay in the
+// store, so the next run only has to find them again. A failure here costs
+// only that rework, so it isn't fatal.
+func (r *Release) checkpoint() {
+	if time.Since(r.lastSave) < checkpointEvery {
+		return
+	}
+	r.lastSave = time.Now()
+	if err := r.cache.saveProgress(r.root); err != nil && r.Logf != nil {
+		r.Logf("warning: saving progress: %v", err)
+	}
 }
 
 // Digest returns a source file's digest, from the cache when the file is
@@ -111,11 +172,21 @@ func (r *Release) Digest(src string) (Digest, error) {
 	if d, ok := r.cache.digest(src); ok {
 		return d, nil
 	}
-	d, err := HashFile(src)
+	f, err := os.Open(src)
 	if err != nil {
 		return Digest{}, err
 	}
-	r.cache.put(src, d)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return Digest{}, err
+	}
+	d, err := hashReader(f, io.Discard)
+	if err != nil {
+		return Digest{}, err
+	}
+	r.cache.putFor(src, fi, d)
+	r.checkpoint()
 	return d, nil
 }
 
@@ -141,6 +212,7 @@ func Cached[T any](r *Release, src, kind string, parse func(string) (T, error)) 
 			e.Meta = map[string]json.RawMessage{}
 		}
 		e.Meta[kind] = raw
+		r.checkpoint()
 	}
 	return v, nil
 }

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,6 +40,13 @@ const (
 	// generated nginx config never expose dot paths.
 	metaDir      = ".crossdock"
 	manifestName = "store-objects"
+	// inProgressName marks a release until it's committed. A publish that
+	// was killed leaves it behind, which is how Prune knows the release
+	// was never live.
+	inProgressName = "in-progress"
+	// incomingPrefix names store files still being added. A publish that
+	// was killed can leave them behind; the next successful one removes them.
+	incomingPrefix = ".incoming-"
 )
 
 // symlink is os.Symlink, swappable so tests can force the fallbacks.
@@ -105,6 +113,12 @@ type Release struct {
 	// objects are the store digests this release links to.
 	objects map[string]bool
 	cache   *cache
+	// lastSave is when the metadata cache was last written (see checkpoint).
+	lastSave time.Time
+	// copyWarned is set once Logf has reported a failed hardlink.
+	copyWarned bool
+	// Logf, if set, reports conditions worth an operator's attention.
+	Logf func(format string, args ...any)
 	// noSymlinks makes the release copy instead of linking (see NoSymlinks).
 	noSymlinks bool
 }
@@ -137,9 +151,16 @@ func Begin(root string, now time.Time) (*Release, error) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return nil, err
 	}
+	if err := os.Mkdir(filepath.Join(dir, metaDir), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, metaDir, inProgressName), nil, 0o644); err != nil {
+		return nil, err
+	}
 	return &Release{
 		root: root, ID: id, Dir: dir, prev: Current(root),
 		objects: map[string]bool{}, cache: loadCache(root),
+		lastSave: time.Now(),
 		// Windows can't atomically rename a symlink over the existing
 		// current symlink ("Access is denied"), even where it can create
 		// symlinks, so it always publishes with current.id.
@@ -293,34 +314,69 @@ func (r *Release) AddFile(src, rel string) (Digest, error) {
 	return d, nil
 }
 
+// AddVerified is AddFile for a package whose digest is already in an index.
+// It fails if src has changed since then: the signed index would describe a
+// different file from the one stored. The next publish picks up the change.
+func (r *Release) AddVerified(src, rel string, want Digest) error {
+	d, err := r.AddFile(src, rel)
+	if err != nil {
+		return err
+	}
+	if d.SHA256 != want.SHA256 {
+		return fmt.Errorf("%s changed during the publish", src)
+	}
+	return nil
+}
+
 func (r *Release) store(src string) (Digest, string, error) {
+	// FindFiles refused symlinks, but src may have been replaced since.
+	// Copying one would put its target in the world-readable store.
+	if fi, err := os.Lstat(src); err != nil {
+		return Digest{}, "", err
+	} else if !fi.Mode().IsRegular() {
+		return Digest{}, "", fmt.Errorf("%s is not a regular file", src)
+	}
 	// Unchanged since the last publish and already stored: no read at all.
 	if d, ok := r.cache.digest(src); ok {
-		obj := filepath.Join(r.root, storeDir, d.SHA256)
-		if fi, err := os.Stat(obj); err == nil && fi.Size() == d.Size {
+		if obj := filepath.Join(r.root, storeDir, d.SHA256); intact(obj, d) {
 			return d, obj, nil
 		}
+	}
+	d, obj, linked, err := r.linkIn(src)
+	if err != nil {
+		return Digest{}, "", err
+	}
+	if linked {
+		return d, obj, nil
 	}
 	f, err := os.Open(src)
 	if err != nil {
 		return Digest{}, "", err
 	}
 	defer f.Close()
-	tmp, err := os.CreateTemp(filepath.Join(r.root, storeDir), ".incoming-*")
+	fi, err := f.Stat()
+	if err != nil {
+		return Digest{}, "", err
+	}
+	tmp, err := os.CreateTemp(filepath.Join(r.root, storeDir), incomingPrefix+"*")
 	if err != nil {
 		return Digest{}, "", err
 	}
 	defer os.Remove(tmp.Name())
-	d, err := hashReader(f, tmp)
+	d, err = hashReader(f, tmp)
+	if err == nil {
+		err = tmp.Sync()
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return Digest{}, "", err
 	}
-	r.cache.put(src, d)
-	obj := filepath.Join(r.root, storeDir, d.SHA256)
-	if _, err := os.Stat(obj); err == nil {
+	r.cache.putFor(src, fi, d)
+	r.checkpoint()
+	obj = filepath.Join(r.root, storeDir, d.SHA256)
+	if intact(obj, d) {
 		return d, obj, nil
 	}
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
@@ -330,6 +386,98 @@ func (r *Release) store(src string) (Digest, string, error) {
 		return Digest{}, "", err
 	}
 	return d, obj, nil
+}
+
+// linkIn adds src to the store as a hardlink, so a package costs no extra
+// disk when the source directory and the store share a file system. The
+// store object then shares src's inode: replace sources by rename (rsync,
+// mv), never by writing into them. linked is false if the caller must copy
+// instead: the file systems differ, the kernel refuses (with
+// fs.protected_hardlinks, the publishing account needs write access to src
+// or must own it), or src isn't world-readable, which can't be changed here
+// without changing the source file too. Windows always copies: a link
+// would keep the source's ACL, which its mode bits don't describe.
+func (r *Release) linkIn(src string) (d Digest, obj string, linked bool, err error) {
+	if runtime.GOOS == "windows" {
+		return Digest{}, "", false, nil
+	}
+	tmp := filepath.Join(r.root, storeDir, incomingPrefix+r.ID+"-"+strconv.Itoa(len(r.objects)))
+	if err := os.Link(src, tmp); err != nil {
+		r.warnCopy(err)
+		return Digest{}, "", false, nil
+	}
+	defer os.Remove(tmp)
+	// From here on, tmp is the inode being stored even if src is replaced.
+	fi, err := os.Stat(tmp)
+	if err != nil {
+		return Digest{}, "", false, err
+	}
+	if fi.Mode().Perm()&0o444 != 0o444 {
+		r.warnCopy(fmt.Errorf("%s is not world-readable", src))
+		return Digest{}, "", false, nil
+	}
+	d, ok := r.cache.digestFor(src, fi)
+	if !ok {
+		if d, err = HashFile(tmp); err != nil {
+			return Digest{}, "", false, err
+		}
+		r.cache.putFor(src, fi, d)
+		r.checkpoint()
+	}
+	obj = filepath.Join(r.root, storeDir, d.SHA256)
+	if intact(obj, d) {
+		return d, obj, true, nil
+	}
+	// Uploads aren't necessarily on disk yet, and metadata for this file is
+	// about to be published.
+	if err := syncFile(tmp); err != nil {
+		return Digest{}, "", false, err
+	}
+	if err := os.Rename(tmp, obj); err != nil {
+		return Digest{}, "", false, err
+	}
+	return d, obj, true, nil
+}
+
+func syncFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
+
+// intact reports whether store object obj exists with d's size. A power cut
+// can leave one truncated; a damaged object must be replaced, not reused.
+func intact(obj string, d Digest) bool {
+	fi, err := os.Stat(obj)
+	return err == nil && fi.Size() == d.Size
+}
+
+// warnCopy reports, once per publish, that packages are being copied into
+// the store, which doubles the disk they use.
+func (r *Release) warnCopy(err error) {
+	if r.copyWarned || r.Logf == nil {
+		return
+	}
+	r.copyWarned = true
+	r.Logf("warning: copying packages into the store, not hardlinking (%v); see README, Disk use", err)
+}
+
+// PreviousPackages counts the files named with suffixes under rel in the
+// release that was current when this one began. It looks at the release
+// itself, so it works for releases from any version of crossdock.
+func (r *Release) PreviousPackages(rel string, suffixes ...string) (int, error) {
+	dir, ok := r.Previous(rel)
+	if !ok {
+		return 0, nil
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return 0, nil
+	}
+	files, err := FindFiles(dir, suffixes...)
+	return len(files), err
 }
 
 func copyFile(src, dst string) error {
@@ -355,6 +503,8 @@ func (r *Release) Abort() error {
 		return nil
 	}
 	r.done = true
+	// Keep what this attempt read: a retry needn't repeat it.
+	_ = r.cache.saveProgress(r.root)
 	return os.RemoveAll(r.Dir)
 }
 
@@ -370,6 +520,9 @@ func (r *Release) Commit() error {
 		return err
 	}
 	if err := r.cache.save(r.root); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(r.Dir, metaDir, inProgressName)); err != nil {
 		return err
 	}
 	tmp := filepath.Join(r.root, "."+currentLink+".tmp")
@@ -446,6 +599,10 @@ func writeAtomic(path string, data []byte) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -498,16 +655,26 @@ func Prune(root string, keep int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	cur := Current(root)
+	var ids, removed []string
 	for _, e := range entries {
-		if e.IsDir() {
-			ids = append(ids, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		dir := filepath.Join(root, releasesDir, e.Name())
+		// A killed publish never went live: it doesn't count as a release,
+		// so it can't push a good one out.
+		if _, err := os.Stat(filepath.Join(dir, metaDir, inProgressName)); err == nil && e.Name() != cur {
+			if err := os.RemoveAll(dir); err != nil {
+				return removed, err
+			}
+			removed = append(removed, e.Name())
+			continue
+		}
+		ids = append(ids, e.Name())
 	}
 	// IDs start with a UTC timestamp, so lexical order is chronological.
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
-	cur := Current(root)
-	var removed []string
 	kept := 0
 	for _, id := range ids {
 		if id == cur || kept < keep {
@@ -556,10 +723,17 @@ func gcStore(root string) error {
 		return err
 	}
 	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		if strings.HasPrefix(e.Name(), incomingPrefix) {
+			// Left by a publish that was killed.
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
 		if strings.HasPrefix(e.Name(), ".") || keep[e.Name()] {
 			continue
 		}
-		p := filepath.Join(dir, e.Name())
 		if legacy {
 			if n, ok := linkCount(p); !ok || n > 1 {
 				continue
