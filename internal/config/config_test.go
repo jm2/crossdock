@@ -19,7 +19,7 @@ func TestLoadExample(t *testing.T) {
 	if len(c.Repos) != 2 || c.Repos[1].Codename != "stable" || c.Repos[1].Origin != "jm2" {
 		t.Errorf("defaults not applied: %+v", c.Repos[1])
 	}
-	if got := c.Repos[0].Architectures; len(got) != 2 || got[1] != "aarch64" || !c.Repos[0].SignPackages {
+	if got := c.Repos[0].Architectures; len(got) != 2 || got[1] != "aarch64" || c.Repos[0].SignPackages {
 		t.Errorf("arch repo: %+v", c.Repos[0])
 	}
 }

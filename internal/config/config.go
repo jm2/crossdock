@@ -104,6 +104,10 @@ type Repo struct {
 
 	// arch
 	// SignPackages creates detached .sig files for packages that lack one.
+	// Off by default: the signed database already pins every package's
+	// SHA-256. It holds each unsigned package in memory and re-signs them
+	// all on every publish, so leave it off for multi-GiB packages, and
+	// sign at build time (makepkg --sign) if clients need package signatures.
 	SignPackages bool `yaml:"sign_packages,omitempty"`
 }
 

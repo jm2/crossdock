@@ -101,6 +101,58 @@ digest and parsed metadata by path, size and mtime, so an unchanged
 package isn't reread, rehashed or copied. Republishing a 400 MiB package
 takes milliseconds.
 
+### Disk use
+
+Package payloads live in `<output>/store`, hardlinked from the source
+directory where possible, so a package normally takes no extra space
+however many releases keep it. A hardlink needs all of these; otherwise
+the package is copied, doubling its disk use, and publish logs a warning
+once:
+
+- The source and `<output>` are on the same file system and, for a
+  sandboxed service, the same mount. `crossdock systemd-config` arranges
+  this when they share a parent directory.
+- The file is world-readable, since `serve` runs as another account.
+- The publishing account owns the file or can write to it
+  (`fs.protected_hardlinks`). Uploads into the packaged `incoming`
+  directories get group `crossdock`, so make them group-writable:
+  `rsync -av --chmod=F664`.
+
+A hardlinked store object is the same file as the source. Replace sources
+by rename, as rsync and `mv` do. Don't overwrite one in place (`cp` onto an
+existing file): that changes what's already published.
+
+### Large repos
+
+The first publish reads every package, and with hundreds of GiB that takes
+a while, so `crossdock-publish.service` has no start timeout. Progress is
+saved every minute and when a publish fails, so a publish that's stopped or
+killed picks up where it left off.
+
+An empty source is usually a storage problem, so a repo that has packages
+won't be published empty: publish fails and the current release stays live.
+If you really mean to empty it, run `crossdock publish -allow-empty`. A
+repo that has never had packages may stay empty. Symlinks to packages
+count as packages, and a dangling one fails the publish.
+
+### Storing repos elsewhere
+
+`output` and each repo's `source` can be anywhere. The packaged units,
+path watch and tmpfiles entry assume `/var/lib/crossdock`, so after pointing
+the config somewhere else, generate matching overrides:
+
+```sh
+sudo crossdock systemd-config -root /      # omit -root to preview
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/crossdock-paths.conf
+sudo systemctl daemon-reload
+```
+
+This sets the publisher's `ReadWritePaths` and the path unit's watched
+directories, adds `RequiresMountsFor` so the services wait for the disk, and
+creates the directories. Put `output` and the sources under one parent, such
+as `/media/data/crossdock/{repo,incoming/arch}`, so packages can be hardlinked.
+Rerun it whenever those paths change.
+
 Config options worth knowing:
 
 | Option | Effect |
@@ -108,6 +160,7 @@ Config options worth knowing:
 | `no_symlinks: true` | In-release links become hardlinks or copies, and the current release goes in `<output>/current.id`. Use it for SMB shares, object-store syncs, or anything that won't follow links. `crossdock serve` handles either; static web servers need symlinks. Windows always publishes this way. |
 | `valid_for: 7d` (deb repos) | Adds `Valid-Until` to `Release`, so clients reject stale or replayed indexes. Enable `crossdock-publish.timer` so the repo is republished before it expires. |
 | `passphrase_file` (signing) | Reads the key's passphrase from a file, e.g. a systemd credential. |
+| `sign_packages: true` (arch repos) | Creates a `.sig` for each package without one. Off by default: the signed database already pins every package's SHA-256. It holds each package in memory and re-signs them all on every publish, so don't use it with multi-GiB packages. |
 | `gnupg_home` + `key_id` (signing) | Signs through `gpg` with an existing keyring instead of `key_file`, for gpg-agent and smartcard keys. This is the only feature that needs `gpg` installed. |
 
 apt repos always set `Acquire-By-Hash: yes` and keep the previous
@@ -176,8 +229,13 @@ pacman (`/etc/pacman.conf`):
 
 ```
 [jm2]
+SigLevel = Required DatabaseRequired PackageOptional
 Server = https://repo.example/arch/$repo/$arch
 ```
+
+The database signature covers every package's SHA-256. `PackageOptional` is
+needed unless packages carry their own signatures (`sign_packages`, or
+`makepkg --sign`).
 
 dnf (`/etc/yum.repos.d/jm2.repo`). One RPM repo holds every architecture,
 and dnf picks what it can install:

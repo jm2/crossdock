@@ -16,6 +16,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,6 +41,10 @@ const (
 	// generated nginx config never expose dot paths.
 	metaDir      = ".crossdock"
 	manifestName = "store-objects"
+	countsName   = "package-counts.json"
+	// incomingPrefix names store files still being added. A publish that
+	// was killed can leave them behind; the next successful one removes them.
+	incomingPrefix = ".incoming-"
 )
 
 // symlink is os.Symlink, swappable so tests can force the fallbacks.
@@ -105,6 +111,14 @@ type Release struct {
 	// objects are the store digests this release links to.
 	objects map[string]bool
 	cache   *cache
+	// counts holds each repo's package count, kept for the next publish.
+	counts map[string]int
+	// lastSave is when the metadata cache was last written (see checkpoint).
+	lastSave time.Time
+	// copyWarned is set once Logf has reported a failed hardlink.
+	copyWarned bool
+	// Logf, if set, reports conditions worth an operator's attention.
+	Logf func(format string, args ...any)
 	// noSymlinks makes the release copy instead of linking (see NoSymlinks).
 	noSymlinks bool
 }
@@ -140,6 +154,7 @@ func Begin(root string, now time.Time) (*Release, error) {
 	return &Release{
 		root: root, ID: id, Dir: dir, prev: Current(root),
 		objects: map[string]bool{}, cache: loadCache(root),
+		counts: map[string]int{}, lastSave: time.Now(),
 		// Windows can't atomically rename a symlink over the existing
 		// current symlink ("Access is denied"), even where it can create
 		// symlinks, so it always publishes with current.id.
@@ -301,17 +316,24 @@ func (r *Release) store(src string) (Digest, string, error) {
 			return d, obj, nil
 		}
 	}
+	d, obj, linked, err := r.linkIn(src)
+	if err != nil {
+		return Digest{}, "", err
+	}
+	if linked {
+		return d, obj, nil
+	}
 	f, err := os.Open(src)
 	if err != nil {
 		return Digest{}, "", err
 	}
 	defer f.Close()
-	tmp, err := os.CreateTemp(filepath.Join(r.root, storeDir), ".incoming-*")
+	tmp, err := os.CreateTemp(filepath.Join(r.root, storeDir), incomingPrefix+"*")
 	if err != nil {
 		return Digest{}, "", err
 	}
 	defer os.Remove(tmp.Name())
-	d, err := hashReader(f, tmp)
+	d, err = hashReader(f, tmp)
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
@@ -319,7 +341,8 @@ func (r *Release) store(src string) (Digest, string, error) {
 		return Digest{}, "", err
 	}
 	r.cache.put(src, d)
-	obj := filepath.Join(r.root, storeDir, d.SHA256)
+	r.checkpoint()
+	obj = filepath.Join(r.root, storeDir, d.SHA256)
 	if _, err := os.Stat(obj); err == nil {
 		return d, obj, nil
 	}
@@ -330,6 +353,82 @@ func (r *Release) store(src string) (Digest, string, error) {
 		return Digest{}, "", err
 	}
 	return d, obj, nil
+}
+
+// linkIn adds src to the store as a hardlink, so a package costs no extra
+// disk when the source directory and the store share a file system. The
+// store object then shares src's inode: replace sources by rename (rsync,
+// mv), never by writing into them. linked is false if the caller must copy
+// instead: the file systems differ, the kernel refuses (with
+// fs.protected_hardlinks, the publishing account needs write access to src
+// or must own it), or src isn't world-readable, which can't be changed here
+// without changing the source file too.
+func (r *Release) linkIn(src string) (d Digest, obj string, linked bool, err error) {
+	// link(2) doesn't follow symlinks, and sources may be symlinks.
+	real, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return Digest{}, "", false, err
+	}
+	fi, err := os.Stat(real)
+	if err != nil {
+		return Digest{}, "", false, err
+	}
+	if fi.Mode().Perm()&0o444 != 0o444 {
+		r.warnCopy(fmt.Errorf("%s is not world-readable", src))
+		return Digest{}, "", false, nil
+	}
+	tmp := filepath.Join(r.root, storeDir, incomingPrefix+r.ID+"-"+strconv.Itoa(len(r.objects)))
+	if err := os.Link(real, tmp); err != nil {
+		r.warnCopy(err)
+		return Digest{}, "", false, nil
+	}
+	defer os.Remove(tmp)
+	d, ok := r.cache.digest(src)
+	if !ok {
+		if d, err = HashFile(tmp); err != nil {
+			return Digest{}, "", false, err
+		}
+		r.cache.put(src, d)
+		r.checkpoint()
+	}
+	obj = filepath.Join(r.root, storeDir, d.SHA256)
+	if _, err := os.Stat(obj); err == nil {
+		return d, obj, true, nil
+	}
+	if err := os.Rename(tmp, obj); err != nil {
+		return Digest{}, "", false, err
+	}
+	return d, obj, true, nil
+}
+
+// warnCopy reports, once per publish, that packages are being copied into
+// the store, which doubles the disk they use.
+func (r *Release) warnCopy(err error) {
+	if r.copyWarned || r.Logf == nil {
+		return
+	}
+	r.copyWarned = true
+	r.Logf("warning: copying packages into the store, not hardlinking (%v); see README, Disk use", err)
+}
+
+// SetPackageCount records how many packages repo key has in this release.
+func (r *Release) SetPackageCount(key string, n int) { r.counts[key] = n }
+
+// PreviousPackageCount returns how many packages repo key had in the release
+// that was current when this one began, or 0 if that isn't known.
+func (r *Release) PreviousPackageCount(key string) int {
+	if r.prev == "" {
+		return 0
+	}
+	b, err := os.ReadFile(filepath.Join(r.root, releasesDir, r.prev, metaDir, countsName))
+	if err != nil {
+		return 0
+	}
+	var counts map[string]int
+	if json.Unmarshal(b, &counts) != nil {
+		return 0
+	}
+	return counts[key]
 }
 
 func copyFile(src, dst string) error {
@@ -355,6 +454,8 @@ func (r *Release) Abort() error {
 		return nil
 	}
 	r.done = true
+	// Keep what this attempt read: a retry needn't repeat it.
+	_ = r.cache.saveProgress(r.root)
 	return os.RemoveAll(r.Dir)
 }
 
@@ -465,6 +566,13 @@ func (r *Release) writeManifest() error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	counts, err := json.Marshal(r.counts)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, countsName), counts, 0o644); err != nil {
+		return err
+	}
 	return os.WriteFile(filepath.Join(dir, manifestName), []byte(strings.Join(ids, "\n")+"\n"), 0o644)
 }
 
@@ -556,10 +664,17 @@ func gcStore(root string) error {
 		return err
 	}
 	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		if strings.HasPrefix(e.Name(), incomingPrefix) {
+			// Left by a publish that was killed.
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
 		if strings.HasPrefix(e.Name(), ".") || keep[e.Name()] {
 			continue
 		}
-		p := filepath.Join(dir, e.Name())
 		if legacy {
 			if n, ok := linkCount(p); !ok || n > 1 {
 				continue

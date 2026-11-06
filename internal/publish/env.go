@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -25,8 +26,8 @@ type Env struct {
 	Logf func(format string, args ...any)
 }
 
-// FindFiles returns files under dir (recursively) whose names end with any
-// of the given suffixes, sorted.
+// FindFiles returns files, and symlinks to files, under dir (recursively)
+// whose names end with any of the given suffixes, sorted.
 func FindFiles(dir string, suffixes ...string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -39,14 +40,27 @@ func FindFiles(dir string, suffixes ...string) ([]string, error) {
 			}
 			return nil
 		}
-		if strings.HasPrefix(d.Name(), ".") || !d.Type().IsRegular() {
+		if strings.HasPrefix(d.Name(), ".") {
 			return nil
 		}
 		for _, s := range suffixes {
-			if strings.HasSuffix(d.Name(), s) {
-				out = append(out, p)
-				break
+			if !strings.HasSuffix(d.Name(), s) {
+				continue
 			}
+			// Symlinked packages count; a dangling link is an error, not
+			// a package that silently disappears from the repo.
+			if d.Type()&fs.ModeSymlink != 0 {
+				fi, err := os.Stat(p)
+				if err != nil {
+					return err
+				}
+				if fi.Mode().IsRegular() {
+					out = append(out, p)
+				}
+			} else if d.Type().IsRegular() {
+				out = append(out, p)
+			}
+			break
 		}
 		return nil
 	})

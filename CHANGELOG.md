@@ -37,8 +37,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependabot auto-merges its grouped minor and patch updates to Go modules and Actions once CI
   passes. Major and security updates (which skip the cooldown) wait for review.
 
+- `crossdock systemd-config` generates the drop-ins and tmpfiles entry for a config whose paths
+  aren't under `/var/lib/crossdock`: `ReadWritePaths`, the watched directories and
+  `RequiresMountsFor`.
+- `crossdock publish -allow-empty` lets a repo that has packages go empty.
+
 ### Changed
 
+- **Packages are hardlinked into the store** when the source shares a file system with `output`,
+  so they no longer take twice the space. Publish warns if it has to copy. Replace sources by
+  rename, not by writing into them.
+- **A publish that's interrupted resumes.** Progress is saved every minute and on failure, and
+  `crossdock-publish.service` no longer has a 30-minute start timeout.
+- **A repo that has packages won't be published empty**, as an unmounted disk would make it look,
+  unless `-allow-empty` is given. Symlinked packages, once skipped silently, are published, and a
+  dangling one is an error.
+- `sign_packages` is off in the packaged config and example: it's unsuitable for large packages,
+  and the signed database covers package contents. pacman clients need
+  `SigLevel = Required DatabaseRequired PackageOptional`.
+- `crossdock-publish.service` can write all of `/var/lib/crossdock`, not just `repo/`, because
+  hardlinks can't cross the separate mounts `ReadWritePaths` makes. Both services now require
+  that path's mount.
 - **No host tools needed.** Signing, `keygen`, and xz and zstd decoding are native Go
   (ProtonMail/go-crypto, ulikunitz/xz, klauspost/compress). The packages no longer depend on
   gnupg, xz or zstd. `gpg` is only used, and only suggested, for `signing.gnupg_home`
