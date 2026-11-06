@@ -76,7 +76,8 @@ Installed-Size: $installed_size
 Section: admin
 Priority: optional
 Homepage: https://github.com/jm2/crossdock
-Depends: gpg, gpg-agent, xz-utils, zstd, systemd | systemd-sysusers | systemd-standalone-sysusers
+Depends: systemd | systemd-sysusers | systemd-standalone-sysusers
+Suggests: gpg, gpg-agent
 Description: publish packages as signed apt, pacman, RPM and GooGet repos
  crossdock takes one directory of built packages per format and publishes
  them as signed, static package repositories. Each publish swaps in
@@ -88,7 +89,7 @@ Description: publish packages as signed apt, pacman, RPM and GooGet repos
  (crossdock-publish.path), the crossdock account, and /var/lib/crossdock.
  Nothing is enabled at install.
 EOF
-echo /etc/crossdock/crossdock.json > "$stage/DEBIAN/conffiles"
+echo /etc/crossdock/crossdock.yaml > "$stage/DEBIAN/conffiles"
 cat > "$stage/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e

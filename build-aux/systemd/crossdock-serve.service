@@ -1,7 +1,7 @@
 # crossdock's read-only HTTP server for the published repositories.
 #
 # It listens on port 8080 on every interface (serve.listen in
-# /etc/crossdock/crossdock.json), and the firewall rules below only let LAN
+# /etc/crossdock/crossdock.yaml), and the firewall rules below only let LAN
 # addresses connect: loopback, link-local, RFC 1918, CGNAT/Tailscale
 # (100.64.0.0/10) and IPv6 ULA. To serve beyond the LAN, put nginx or
 # Caddy in front (`crossdock nginx-config`) or widen the allow list with a
@@ -18,10 +18,10 @@ Description=crossdock package repository server
 Documentation=https://github.com/jm2/crossdock
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/etc/crossdock/crossdock.json
+ConditionPathExists=/etc/crossdock/crossdock.yaml
 
 [Service]
-ExecStart=@CROSSDOCK@ serve -c /etc/crossdock/crossdock.json
+ExecStart=@CROSSDOCK@ serve -c /etc/crossdock/crossdock.yaml
 # A throwaway account: the published tree is world-readable static files,
 # so the server needs no identity and can write nothing.
 DynamicUser=yes

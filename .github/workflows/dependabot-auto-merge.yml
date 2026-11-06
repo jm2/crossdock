@@ -1,0 +1,60 @@
+name: Dependabot auto-merge
+# Turns on squash auto-merge for Dependabot's grouped minor and patch
+# version updates (go-minor-and-patch, actions-minor-and-patch in
+# dependabot.yml), so they merge by themselves once the required CI checks
+# on main pass. Everything else waits for a person:
+#   - major updates;
+#   - security updates, which are ungrouped and skip the cooldown in
+#     dependabot.yml, so a just-published (possibly compromised) fix gets
+#     no waiting period;
+#   - anything whose metadata isn't explicitly minor or patch.
+#
+# pull_request_target runs this file as it is on main, not as the PR has
+# it, so a Dependabot PR that bumps fetch-metadata can't change what runs
+# with the write token. The job never checks out or runs PR code: it only
+# reads Dependabot's metadata and calls `gh pr merge --auto`.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'jm2/crossdock'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - name: Enable auto-merge (squash) for grouped minor and patch updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GROUP: ${{ steps.meta.outputs.dependency-group }}
+          DEPS: ${{ steps.meta.outputs.updated-dependencies-json }}
+        run: |
+          set -euo pipefail
+          case "$GROUP" in
+            go-minor-and-patch | actions-minor-and-patch) ;;
+            *)
+              echo "Not a grouped minor/patch version update (group: '${GROUP}'); leaving it for review."
+              exit 0
+              ;;
+          esac
+          # Fail closed: every dependency must be explicitly minor or patch.
+          # Missing, malformed, empty or unknown metadata leaves it manual.
+          if ! jq -e 'type == "array" and length > 0 and
+                all(.[]; .updateType == "version-update:semver-minor" or .updateType == "version-update:semver-patch")' \
+                <<<"$DEPS" >/dev/null 2>&1; then
+            echo "Update types aren't all minor/patch; leaving it for review:"
+            printf '%s\n' "$DEPS"
+            exit 0
+          fi
+          gh pr merge --auto --squash "$PR_URL"

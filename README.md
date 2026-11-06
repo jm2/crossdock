@@ -26,7 +26,7 @@ The packages install:
 | | |
 |---|---|
 | `/usr/bin/crossdock` | the binary |
-| `/etc/crossdock/crossdock.json` | config: `deb`, `arch`, `rpm` and `goo` repos named `local`, served on `:8080` (kept on upgrade) |
+| `/etc/crossdock/crossdock.yaml` | config: `deb`, `arch`, `rpm` and `goo` repos named `local`, served on `:8080` (kept on upgrade) |
 | `crossdock-serve.service` | the read-only server, as a throwaway `DynamicUser`, **LAN-only** |
 | `crossdock-publish.service` / `.path` | republish when files land in `/var/lib/crossdock/incoming/{deb,arch,rpm,goo}` |
 | `crossdock` account (sysusers.d) | owns `/var/lib/crossdock/repo`; members of its group can upload |
@@ -83,8 +83,8 @@ is fine on a LAN. For the internet, put nginx or Caddy in front (see
 ## Run it by hand
 
 ```sh
-crossdock publish -c crossdock.json          # see examples/crossdock.json
-crossdock serve -c crossdock.json
+crossdock publish -c crossdock.yaml          # see examples/crossdock.yaml
+crossdock serve -c crossdock.yaml
 crossdock inspect some.deb some.pkg.tar.zst  # show parsed metadata as JSON
 ```
 
@@ -93,6 +93,8 @@ and prunes old releases (`keep_releases`, default 3). If a publish fails,
 the previous release stays live. Package payloads are deduplicated in
 `<output>/store` and hardlinked into releases. Paths in the config can
 use environment variables, e.g. `${CREDENTIALS_DIRECTORY}/signing.asc`.
+The config is YAML. Unknown or duplicate keys are errors, reported with
+the line and column. JSON is valid YAML, so a JSON config also works.
 
 Publishing is incremental. `<output>/cache.json` remembers each package's
 digest and parsed metadata by path, size and mtime, so an unchanged
@@ -103,9 +105,10 @@ Config options worth knowing:
 
 | Option | Effect |
 |---|---|
-| `"no_symlinks": true` | In-release links become hardlinks or copies, and the current release goes in `<output>/current.id`. Use it for SMB shares, object-store syncs, or anything that won't follow links. `crossdock serve` handles either; static web servers need symlinks. Windows without symlink rights falls back to this automatically. |
-| `"valid_for": "7d"` (deb repos) | Adds `Valid-Until` to `Release`, so clients reject stale or replayed indexes. Enable `crossdock-publish.timer` so the repo is republished before it expires. |
-| `"passphrase_file"` (signing) | Reads the key's passphrase from a file, e.g. a systemd credential. |
+| `no_symlinks: true` | In-release links become hardlinks or copies, and the current release goes in `<output>/current.id`. Use it for SMB shares, object-store syncs, or anything that won't follow links. `crossdock serve` handles either; static web servers need symlinks. Windows always publishes this way. |
+| `valid_for: 7d` (deb repos) | Adds `Valid-Until` to `Release`, so clients reject stale or replayed indexes. Enable `crossdock-publish.timer` so the repo is republished before it expires. |
+| `passphrase_file` (signing) | Reads the key's passphrase from a file, e.g. a systemd credential. |
+| `gnupg_home` + `key_id` (signing) | Signs through `gpg` with an existing keyring instead of `key_file`, for gpg-agent and smartcard keys. This is the only feature that needs `gpg` installed. |
 
 apt repos always set `Acquire-By-Hash: yes` and keep the previous
 generation's indexes under `by-hash/`, so a client that read the old
@@ -117,8 +120,8 @@ The output is plain static files, so any web server or object store
 works. crossdock ships two ways to serve it with the right headers:
 
 ```sh
-crossdock serve -c crossdock.json                    # built-in, read-only, :8080
-crossdock nginx-config -c crossdock.json -server-name repo.example > /etc/nginx/conf.d/crossdock.conf
+crossdock serve -c crossdock.yaml                    # built-in, read-only, :8080
+crossdock nginx-config -c crossdock.yaml -server-name repo.example > /etc/nginx/conf.d/crossdock.conf
 ```
 
 Both are generated from one rules table (`internal/serve/rules.go`), so
@@ -148,6 +151,16 @@ nginx or Caddy and either serve the directory there with the generated
 config, or reverse-proxy to `serve`.
 
 ## Clients
+
+crossdock targets current releases only: Debian stable (13) and newer,
+Fedora 44 and 45, EL10.2 and newer, and Arch. CI runs each one's real
+client against a signed crossdock repo: apt on Debian stable (Sequoia's
+`sqv`) and Ubuntu 24.04 (`gpgv`), dnf5 on Fedora 44 and 45, dnf4 on
+AlmaLinux 10, and pacman on Arch.
+
+Keys from `crossdock keygen` are v4 Ed25519. Every one of those clients
+accepts that format. The newer RFC 9580 v6 keys aren't used because
+GnuPG, which pacman and EL10's dnf verify with, rejects them.
 
 apt (`/etc/apt/sources.list.d/jm2.sources`):
 
@@ -183,6 +196,12 @@ package's SHA-256. crossdock doesn't sign RPM headers itself yet. To use
 `gpgcheck=1`, sign packages at build time with `rpmsign` (or let COPR do
 it).
 
+**Fedora 45 needs signed packages.** Its rpm 6.1 defaults to
+`%_pkgverify_level all`, which requires a valid signature on every
+package, so unsigned RPMs from any repo won't install there. Sign them
+with `rpmsign` and use `gpgcheck=1`. Fedora 44 and EL10 (`digest`) still
+install unsigned packages with `gpgcheck=0`.
+
 GooGet (Windows):
 
 ```
@@ -205,19 +224,21 @@ For pacman, add it with `pacman-key --add` and `--lsign-key`.
 
 ## Requirements
 
-- `gpg` for signing and `crossdock keygen` (any key gpg can use, including
-  smartcards via `gnupg_home` + `key_id`).
-- `xz` and `zstd` binaries for reading xz- or zstd-compressed packages.
-  That covers every `.pkg.tar.zst`, and Ubuntu's `dpkg-deb` default.
+None at run time. crossdock is one static binary. Signing, `crossdock
+keygen` (via [ProtonMail/go-crypto](https://github.com/ProtonMail/go-crypto)),
+xz and zstd decoding ([ulikunitz/xz](https://github.com/ulikunitz/xz),
+[klauspost/compress](https://github.com/klauspost/compress)) and the
+YAML config ([goccy/go-yaml](https://github.com/goccy/go-yaml)) are all
+native Go. `gpg` is needed only for `gnupg_home` signing, so the packages
+only suggest it.
 
-The packages depend on all three. Native Go signing and decompression
-(which would drop these) need third-party modules; see
-[PLAN.md](PLAN.md).
+Building needs Go 1.27.3 or newer (`go.mod`). Older `go` commands fetch it
+themselves with `GOTOOLCHAIN=auto`.
 
 ## Development
 
 ```sh
-make test        # vet + go test -race; the apt end-to-end test runs when gpg, dpkg-deb and apt-get exist,
+make test        # vet + go test -race; the apt end-to-end test runs when dpkg-deb and apt-get exist,
                  # and the RPM tests check against createrepo_c when `pip install createrepo_c` is done
 make cross       # dist/crossdock-<os>-<arch>
 make deb ARCH=amd64
@@ -227,7 +248,12 @@ Packaging lives in `build-aux/`, and every package installs the same tree
 through `build-aux/linux/install-tree.sh`. CI installs the `.deb` on a
 runner with real systemd and runs `build-aux/ci/system-service-smoke.sh`.
 That test does a path-triggered publish, then has apt install and upgrade
-from `:8080`. Tagging `vX.Y.Z` with a matching `CHANGELOG.md` section
+from `:8080`. `build-aux/ci/dnf-smoke.sh` and `pacman-smoke.sh` run the
+real dnf and pacman against signed repos in Fedora 44/45, AlmaLinux 10 and
+Arch containers, and check that a tampered index is rejected. Dependabot
+keeps Go modules and Actions current, and auto-merges its grouped minor
+and patch updates once the required checks pass. Major and security
+updates wait for review. Tagging `vX.Y.Z` with a matching `CHANGELOG.md` section
 builds the archives, `.deb`, `.rpm` (Fedora 44) and Arch package, then
 creates a draft release with `SHA256SUMS.txt` and provenance attestations.
 The Arch job also syncs crossdock's own repo with real pacman.

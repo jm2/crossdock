@@ -1,0 +1,35 @@
+# crossdock configuration (kept on upgrade). See
+# https://github.com/jm2/crossdock#readme for every option.
+output: /var/lib/crossdock/repo
+keep_releases: 3
+
+# The signing key is passed in as a systemd credential; see
+# crossdock-publish.service.
+signing:
+  key_file: ${CREDENTIALS_DIRECTORY}/signing.asc
+
+serve:
+  listen: ":8080"
+
+# Drop packages into /var/lib/crossdock/incoming/<format>/ to publish them.
+repos:
+  - name: local
+    format: deb
+    source: /var/lib/crossdock/incoming/deb
+    suite: stable
+    component: main
+    architectures: [amd64, arm64]
+
+  - name: local
+    format: arch
+    source: /var/lib/crossdock/incoming/arch
+    architectures: [x86_64, aarch64]
+    sign_packages: true
+
+  - name: local
+    format: rpm
+    source: /var/lib/crossdock/incoming/rpm
+
+  - name: local
+    format: goo
+    source: /var/lib/crossdock/incoming/goo

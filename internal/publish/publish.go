@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -42,6 +43,13 @@ const (
 
 // symlink is os.Symlink, swappable so tests can force the fallbacks.
 var symlink = os.Symlink
+
+// removeLink is os.Remove for the old current symlink, swappable so tests
+// can make the migration to current.id fail.
+var removeLink = os.Remove
+
+// lstat is os.Lstat for the old current symlink, swappable for tests.
+var lstat = os.Lstat
 
 // Digest describes a file's size and hashes.
 type Digest struct {
@@ -132,6 +140,10 @@ func Begin(root string, now time.Time) (*Release, error) {
 	return &Release{
 		root: root, ID: id, Dir: dir, prev: Current(root),
 		objects: map[string]bool{}, cache: loadCache(root),
+		// Windows can't atomically rename a symlink over the existing
+		// current symlink ("Access is denied"), even where it can create
+		// symlinks, so it always publishes with current.id.
+		noSymlinks: runtime.GOOS == "windows",
 	}, nil
 }
 
@@ -142,7 +154,9 @@ func (r *Release) Previous(rel string) (string, bool) {
 		return "", false
 	}
 	clean := filepath.Clean(filepath.FromSlash(rel))
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	// IsLocal also rejects rooted paths ("\\etc") and reserved names
+	// ("NUL") on Windows, which IsAbs alone lets through.
+	if !filepath.IsLocal(clean) {
 		return "", false
 	}
 	return filepath.Join(r.root, releasesDir, r.prev, clean), true
@@ -182,7 +196,9 @@ func (r *Release) LinkPrevious(rel string) (bool, error) {
 // paths that escape it.
 func (r *Release) Path(rel string) (string, error) {
 	clean := filepath.Clean(filepath.FromSlash(rel))
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	// IsLocal also rejects rooted paths ("\\etc") and reserved names
+	// ("NUL") on Windows, which IsAbs alone lets through.
+	if !filepath.IsLocal(clean) {
 		return "", fmt.Errorf("path %q escapes release", rel)
 	}
 	return filepath.Join(r.Dir, clean), nil
@@ -364,17 +380,59 @@ func (r *Release) Commit() error {
 			return err
 		}
 		_ = os.Remove(filepath.Join(r.root, currentFile))
-	} else {
-		if err := writeAtomic(filepath.Join(r.root, currentFile), []byte(r.ID+"\n")); err != nil {
-			return err
-		}
-		// A stale symlink would otherwise win over current.id.
-		if fi, err := os.Lstat(filepath.Join(r.root, currentLink)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			_ = os.Remove(filepath.Join(r.root, currentLink))
-		}
+	} else if err := r.commitID(); err != nil {
+		return err
 	}
 	r.done = true
 	return nil
+}
+
+// commitID points current.id at this release, then removes any current
+// symlink left by an earlier publish, which would otherwise win over
+// current.id. If that removal fails, current.id is put back, so it never
+// names a release the caller is about to abort, and the symlink keeps
+// serving the release that was live.
+func (r *Release) commitID() error {
+	idPath, link := filepath.Join(r.root, currentFile), filepath.Join(r.root, currentLink)
+	old, readErr := os.ReadFile(idPath)
+	if err := writeAtomic(idPath, []byte(r.ID+"\n")); err != nil {
+		return err
+	}
+	rollback := func(err error) error {
+		if readErr == nil {
+			_ = writeAtomic(idPath, old)
+		} else {
+			_ = os.Remove(idPath)
+		}
+		return fmt.Errorf("removing the old %s symlink: %w", currentLink, err)
+	}
+	fi, err := lstat(link)
+	switch {
+	case os.IsNotExist(err):
+		return nil
+	case err != nil:
+		// It may still be a symlink that would win over current.id.
+		return rollback(err)
+	case fi.Mode()&os.ModeSymlink == 0:
+		return nil
+	}
+	if err := retry(func() error { return removeLink(link) }); err != nil && !os.IsNotExist(err) {
+		return rollback(err)
+	}
+	return nil
+}
+
+// retry runs op until it succeeds, fails with a non-transient error, or
+// about two seconds of transient failures have passed (see transient).
+func retry(op func() error) error {
+	var err error
+	for i := 0; i < 20; i++ {
+		if err = op(); err == nil || !transient(err) {
+			return err
+		}
+		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)
+	}
+	return err
 }
 
 // writeAtomic replaces path with data via a temp file and rename.
@@ -394,7 +452,7 @@ func writeAtomic(path string, data []byte) error {
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return retry(func() error { return os.Rename(tmp.Name(), path) })
 }
 
 func (r *Release) writeManifest() error {

@@ -62,6 +62,7 @@ jobs:
       matrix:
         # Windows publishes without symlinks (current.id and copies); the
         # tests that need apt, gpg or createrepo_c skip themselves there.
+        # Signing, keygen and xz/zstd decoding are native everywhere.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,62 +80,88 @@ jobs:
         run: pip install --break-system-packages createrepo_c
 
       # On Linux the apt end-to-end test runs against the runner's real
-      # gpg, dpkg-deb and apt-get; elsewhere it skips itself.
+      # dpkg-deb and apt-get; elsewhere it skips itself.
       - name: Test
         run: go test -race -count=1 -fullpath ./...
 
-  # Real dnf (dnf5) against a signed repo served by `crossdock serve`:
-  # repo_gpgcheck verifies repomd.xml.asc, then dnf lists and downloads the
-  # packages; a tampered repomd.xml must be rejected.
+  # Real dnf against a signed repo served by `crossdock serve`, on every
+  # supported RPM distro: repo_gpgcheck verifies repomd.xml.asc, then dnf
+  # lists and downloads the packages; a tampered repomd.xml must be
+  # rejected. Fedora runs dnf5 and rpm-sequoia; EL10 runs dnf4 with gpgme.
   dnf:
-    name: dnf against crossdock (Fedora)
+    name: dnf against crossdock (${{ matrix.image }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["fedora:44", "fedora:45", "almalinux:10"]
     container:
-      image: fedora:44
+      image: ${{ matrix.image }}
+    env:
+      # The distro Go may be older than go.mod; fetch the toolchain it names.
+      GOTOOLCHAIN: auto
     steps:
       - name: Install dependencies
-        run: dnf install -y --setopt=install_weak_deps=False git-core golang gnupg2 xz zstd
+        run: dnf install -y --setopt=install_weak_deps=False git-core golang
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Publish, serve and use the repo with dnf
         run: |
-          set -euo pipefail
+          # The container runs as root on a checkout it doesn't own; without
+          # this, git refuses it and go build fails to stamp VCS info.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           go build -o /usr/local/bin/crossdock ./cmd/crossdock
-          work=$(mktemp -d)
-          export GNUPGHOME=$work/gnupg
-          mkdir -m 0700 "$GNUPGHOME"
-          gpg --batch --passphrase '' --quick-gen-key "crossdock CI <ci@example.invalid>" ed25519 sign never
-          gpg --batch --armor --export-secret-keys > "$work/signing.asc"
-          mkdir "$work/in"
-          for f in internal/rpm/testdata/*.rpm; do
-            case "$f" in */empty-signed-*) ;; *) cp "$f" "$work/in/" ;; esac
-          done
-          cat > "$work/crossdock.json" <<EOF
-          {"output": "$work/out", "signing": {"key_file": "$work/signing.asc"},
-           "repos": [{"name": "t", "format": "rpm", "source": "$work/in"}]}
-          EOF
-          crossdock publish -c "$work/crossdock.json"
-          crossdock serve -q -c "$work/crossdock.json" -listen 127.0.0.1:8080 &
-          sleep 1
-          dnf_repo=(--setopt=reposdir=/dev/null "--repofrompath=crossdock,http://127.0.0.1:8080/rpm/t"
-            --setopt=crossdock.repo_gpgcheck=1 --setopt=crossdock.gpgcheck=0
-            --setopt=crossdock.gpgkey=http://127.0.0.1:8080/crossdock.asc --repo=crossdock -y)
-          dnf "${dnf_repo[@]}" makecache
-          dnf "${dnf_repo[@]}" repoquery --qf '%{full_nevra}\n' | sort | tee "$work/nevras"
-          test "$(grep -vc '\.src$' "$work/nevras")" -eq 8
-          dnf "${dnf_repo[@]}" repoquery --provides Archer | grep -qx 'barb >= 11.22.33-44'
-          dnf "${dnf_repo[@]}" repoquery --requires Archer | grep -qx 'fooa <= 2'
-          cd "$work" && dnf "${dnf_repo[@]}" download Rimmer && ls Rimmer-*.rpm
-          # A repomd.xml that no longer matches its signature must fail.
-          cur=$(readlink -f "$work/out/current")
-          sed -i 's|<revision>|<revision>1|' "$cur/rpm/t/repodata/repomd.xml"
-          dnf clean all >/dev/null
-          if dnf "${dnf_repo[@]}" makecache; then
-            echo "::error::dnf accepted a repomd.xml with a bad signature"
-            exit 1
-          fi
+          build-aux/ci/dnf-smoke.sh internal/rpm/testdata
+
+  # The apt end-to-end test on current Debian stable, whose apt verifies
+  # with Sequoia's sqv (the Ubuntu runners' apt uses gpgv).
+  apt-debian:
+    name: apt against crossdock (debian:stable)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: debian:stable
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git golang-go
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test against the real apt
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          apt-get --version | head -n 1
+          go test -count=1 -v -run 'TestAptEndToEnd' ./cmd/crossdock
+
+  # Real pacman against a signed repo: database and package signatures
+  # are checked by pacman's GnuPG, and a tampered database must fail.
+  pacman:
+    name: pacman against crossdock (Arch Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: archlinux:latest
+    env:
+      GOTOOLCHAIN: auto
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm git go
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish, serve and use the repo with pacman
+        run: |
+          # The container runs as root on a checkout it doesn't own; without
+          # this, git refuses it and go build fails to stamp VCS info.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          go build -o /usr/local/bin/crossdock ./cmd/crossdock
+          build-aux/ci/pacman-smoke.sh
 
   # Builds the .deb, installs it, and runs crossdock the packaged way under
   # the runner's real systemd: path-triggered publishing, the LAN server on

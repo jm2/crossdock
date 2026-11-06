@@ -14,9 +14,10 @@ url="https://github.com/jm2/crossdock"
 license=('GPL-3.0-or-later')
 provides=('crossdock')
 conflicts=('crossdock')
-depends=('gnupg' 'xz' 'zstd')
-optdepends=('firewalld: the bundled crossdock service definition')
-backup=('etc/crossdock/crossdock.json')
+depends=()
+optdepends=('gnupg: sign with a GnuPG keyring or smartcard (signing.gnupg_home)'
+            'firewalld: the bundled crossdock service definition')
+backup=('etc/crossdock/crossdock.yaml')
 options=('!strip' '!debug')
 source_x86_64=("crossdock-$pkgver-amd64.deb::$url/releases/download/v$pkgver/crossdock-amd64.deb")
 source_aarch64=("crossdock-$pkgver-arm64.deb::$url/releases/download/v$pkgver/crossdock-arm64.deb")

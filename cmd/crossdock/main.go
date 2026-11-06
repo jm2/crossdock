@@ -81,7 +81,7 @@ func main() {
 
 func cmdPublish(args []string) error {
 	fs := flag.NewFlagSet("publish", flag.ExitOnError)
-	cfgPath := fs.String("c", "crossdock.json", "config file")
+	cfgPath := fs.String("c", "crossdock.yaml", "config file")
 	allowUnsigned := fs.Bool("allow-unsigned", false, "publish without signatures when no signing key is configured")
 	quiet := fs.Bool("q", false, "only print errors")
 	fs.Parse(args)
@@ -273,7 +273,7 @@ func serveSettings(root, cfgPath string) (string, config.Serve, error) {
 
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	cfgPath := fs.String("c", "crossdock.json", "config file (for its output directory)")
+	cfgPath := fs.String("c", "crossdock.yaml", "config file (for its output directory)")
 	root := fs.String("root", "", "output directory to serve (overrides -c)")
 	listen := fs.String("listen", "", "listen address (default: config serve.listen, else "+config.DefaultListen+")")
 	index := fs.Bool("index", false, "enable HTML directory listings (also config serve.index)")
@@ -306,7 +306,7 @@ func cmdServe(args []string) error {
 
 func cmdNginx(args []string) error {
 	fs := flag.NewFlagSet("nginx-config", flag.ExitOnError)
-	cfgPath := fs.String("c", "crossdock.json", "config file (for its output directory)")
+	cfgPath := fs.String("c", "crossdock.yaml", "config file (for its output directory)")
 	root := fs.String("root", "", "output directory (overrides -c)")
 	listen := fs.String("listen", "80", "nginx listen directive value")
 	name := fs.String("server-name", "_", "nginx server_name")

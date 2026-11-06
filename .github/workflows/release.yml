@@ -111,8 +111,8 @@ jobs:
           set -euo pipefail
           mkdir -p dogfood/in
           cp release/*.deb dogfood/in/
-          echo '{"output":"out","repos":[{"name":"crossdock","format":"deb","source":"in","architectures":["amd64","arm64"]}]}' > dogfood/crossdock.json
-          dist/crossdock-linux-amd64 publish -allow-unsigned -c dogfood/crossdock.json
+          printf '%s\n' 'output: out' 'repos:' '  - {name: crossdock, format: deb, source: in, architectures: [amd64, arm64]}' > dogfood/crossdock.yaml
+          dist/crossdock-linux-amd64 publish -allow-unsigned -c dogfood/crossdock.yaml
           grep -c '^Package: crossdock$' dogfood/out/current/deb/crossdock/dists/stable/main/binary-arm64/Packages
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -170,7 +170,7 @@ jobs:
           rpm -qp --scripts "out/crossdock-$ARCH.rpm" | tee scripts.txt
           grep -q 'systemd-sysusers' scripts.txt
           grep -q 'systemd-tmpfiles' scripts.txt
-          rpm -qcp "out/crossdock-$ARCH.rpm" | grep -qx /etc/crossdock/crossdock.json
+          rpm -qcp "out/crossdock-$ARCH.rpm" | grep -qx /etc/crossdock/crossdock.yaml
       # Install the package in this Fedora container. There's no systemd
       # here, so check the payload rather than the services; CI's packaging
       # job runs the units under real systemd.
@@ -195,8 +195,8 @@ jobs:
           set -euo pipefail
           mkdir -p dogfood/in
           cp "out/crossdock-$ARCH.rpm" dogfood/in/
-          echo '{"output":"out","repos":[{"name":"crossdock","format":"rpm","source":"in"}]}' > dogfood/crossdock.json
-          crossdock publish -allow-unsigned -c dogfood/crossdock.json
+          printf '%s\n' 'output: out' 'repos:' '  - {name: crossdock, format: rpm, source: in}' > dogfood/crossdock.yaml
+          crossdock publish -allow-unsigned -c dogfood/crossdock.yaml
           dnf --setopt=reposdir=/dev/null --repofrompath=dogfood,"file://$PWD/dogfood/out/current/rpm/crossdock" \
             --setopt=dogfood.gpgcheck=0 --repo=dogfood repoquery --qf '%{full_nevra}\n' | tee nevra.txt
           grep -q "^crossdock-0:${VERSION//-/\~}-1" nevra.txt
@@ -247,8 +247,8 @@ jobs:
           crossdock version
           mkdir -p dogfood/in
           cp out/crossdock-x86_64.pkg.tar.zst dogfood/in/
-          echo '{"output":"out","repos":[{"name":"dogfood","format":"arch","source":"in"}]}' > dogfood/crossdock.json
-          crossdock publish -allow-unsigned -c dogfood/crossdock.json
+          printf '%s\n' 'output: out' 'repos:' '  - {name: dogfood, format: arch, source: in}' > dogfood/crossdock.yaml
+          crossdock publish -allow-unsigned -c dogfood/crossdock.yaml
           cat >> /etc/pacman.conf <<EOF
           [dogfood]
           SigLevel = Never

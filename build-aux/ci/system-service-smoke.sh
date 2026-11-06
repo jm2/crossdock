@@ -62,13 +62,9 @@ for u in "${units[@]}"; do
 done
 systemd-analyze verify "${units[@]/#//usr/lib/systemd/system/}" || fail "systemd-analyze verify"
 
-echo "== signing key"
-gnupg=$work/gnupg
-mkdir -m 0700 "$gnupg"
-gpg --homedir "$gnupg" --batch --passphrase '' --quick-gen-key "crossdock CI <ci@example.invalid>" ed25519 sign never
-install -m 0600 /dev/null /etc/crossdock/signing.asc
-gpg --homedir "$gnupg" --batch --armor --export-secret-keys > /etc/crossdock/signing.asc
-gpgconf --homedir "$gnupg" --kill all || true
+echo "== signing key (the README's setup)"
+crossdock keygen -uid "crossdock CI <ci@example.invalid>" -out /etc/crossdock/signing.asc
+[[ $(stat -c '%U %a' /etc/crossdock/signing.asc) == "root 600" ]] || fail "signing key: $(stat -c '%U %a' /etc/crossdock/signing.asc)"
 
 echo "== enable units"
 systemctl enable --now crossdock-publish.path crossdock-serve.service

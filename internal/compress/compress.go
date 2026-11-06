@@ -3,10 +3,8 @@
 
 // Package compress opens compressed streams by sniffing magic bytes.
 //
-// gzip and bzip2 are decoded natively. xz and zstd currently shell out to
-// the xz / zstd binaries; M2 replaces those with pure-Go decoders
-// (ulikunitz/xz, klauspost/compress/zstd) so crossdock has no host
-// dependencies.
+// Every format is decoded in pure Go, so crossdock needs no xz or zstd
+// binaries on the host.
 package compress
 
 import (
@@ -16,8 +14,9 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"os/exec"
-	"strings"
+
+	"github.com/klauspost/compress/zstd"
+	"github.com/ulikunitz/xz"
 )
 
 // Kind is a detected compression format.
@@ -66,45 +65,26 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 	case Bzip2:
 		return io.NopCloser(bzip2.NewReader(br)), nil
 	case XZ:
-		return execReader(br, "xz", "-dc")
+		r, err := xz.NewReader(br)
+		if err != nil {
+			return nil, fmt.Errorf("xz: %w", err)
+		}
+		return io.NopCloser(r), nil
 	case Zstd:
-		return execReader(br, "zstd", "-dc", "-q")
+		d, err := zstd.NewReader(br, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil, fmt.Errorf("zstd: %w", err)
+		}
+		return zstdCloser{d}, nil
 	default:
 		return nil, fmt.Errorf("unsupported compression %s", k)
 	}
 }
 
-type cmdReader struct {
-	io.ReadCloser
-	cmd    *exec.Cmd
-	stderr *strings.Builder
-}
+// zstdCloser adapts *zstd.Decoder, whose Close returns nothing.
+type zstdCloser struct{ *zstd.Decoder }
 
-func (c *cmdReader) Close() error {
-	// Drain so the child can exit even if the caller stopped early.
-	_, _ = io.Copy(io.Discard, c.ReadCloser)
-	_ = c.ReadCloser.Close()
-	if err := c.cmd.Wait(); err != nil {
-		return fmt.Errorf("%s: %w: %s", c.cmd.Path, err, strings.TrimSpace(c.stderr.String()))
-	}
+func (z zstdCloser) Close() error {
+	z.Decoder.Close()
 	return nil
-}
-
-func execReader(r io.Reader, name string, args ...string) (io.ReadCloser, error) {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return nil, fmt.Errorf("%s-compressed input needs the %q binary until native decoding lands (M2): %w", name, name, err)
-	}
-	cmd := exec.Command(path, args...)
-	cmd.Stdin = r
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return &cmdReader{ReadCloser: out, cmd: cmd, stderr: &stderr}, nil
 }

@@ -27,13 +27,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   republishes daily.
 - **`no_symlinks`** — publish without symlinks (in-release links become hardlinks or copies;
   `current.id` records the current release). It's used automatically where symlinks can't be
-  created, as on Windows without Developer Mode.
+  created, and always on Windows.
 - **`crossdock keygen`** creates an Ed25519 signing key, optionally passphrase-protected, and
   `signing.passphrase_file` reads a passphrase from a file such as a systemd credential.
+- `signing.key_id` can pick one key from a `key_file` that holds several.
+- CI runs the real client for every supported target against a signed repo, and checks that a
+  tampered index is rejected: apt on Debian stable (sqv) and Ubuntu (gpgv), dnf on Fedora 44
+  and 45 and AlmaLinux 10, and pacman on Arch.
+- Dependabot auto-merges its grouped minor and patch updates to Go modules and Actions once CI
+  passes. Major and security updates (which skip the cooldown) wait for review.
 
 ### Changed
 
+- **No host tools needed.** Signing, `keygen`, and xz and zstd decoding are native Go
+  (ProtonMail/go-crypto, ulikunitz/xz, klauspost/compress). The packages no longer depend on
+  gnupg, xz or zstd. `gpg` is only used, and only suggested, for `signing.gnupg_home`
+  (agent and smartcard keys).
+- **The config is YAML**: `crossdock.yaml`, and `/etc/crossdock/crossdock.yaml` in the
+  packages. Unknown and duplicate keys are errors with line and column. JSON configs still load.
+- Keys are v4 Ed25519 with SHA-512 signatures, which every supported client accepts. GnuPG
+  (pacman, EL10's dnf) rejects RFC 9580 v6 keys.
+- Supported targets are current releases only: Debian 13+, Fedora 44/45, EL10.2+ and Arch.
+  Building needs Go 1.27.3 (`GOTOOLCHAIN=auto` fetches it).
 - The store is garbage-collected from per-release manifests rather than hardlink counts.
+
+### Fixed
+
+- Windows always publishes without symlinks. With symlink rights, the `current` swap failed
+  with "Access is denied".
+- Release paths are checked with `filepath.IsLocal`, which also rejects rooted paths and
+  reserved names on Windows.
 
 ## [0.1.0] — 2026-11-03
 
