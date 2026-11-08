@@ -111,6 +111,9 @@ func TestAnyVersionDependency(t *testing.T) {
 	if pkg.Name != "a" {
 		t.Errorf("name = %q", pkg.Name)
 	}
+	if !bytes.Equal(pkg.Spec, []byte(spec)) {
+		t.Errorf("spec = %s, want %s", pkg.Spec, spec)
+	}
 }
 
 // googetPkgSpec mirrors goolib.PkgSpec (google/googet), so the index is
