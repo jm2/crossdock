@@ -111,6 +111,11 @@ func parseSpec(data []byte) (*Package, error) {
 		return nil, fmt.Errorf("pkgspec: %w", err)
 	}
 	for dep, v := range s.PkgDependencies {
+		// googet reads an empty requirement as "any version" (fixVer pads it
+		// to 0.0.0, and the client's satisfiesVersion skips empty ones).
+		if v == "" {
+			continue
+		}
 		if err := checkVersion(v); err != nil {
 			return nil, fmt.Errorf("pkgspec: dependency %q: %w", dep, err)
 		}
