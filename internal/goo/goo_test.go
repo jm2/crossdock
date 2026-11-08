@@ -94,10 +94,25 @@ func TestInvalidSpecs(t *testing.T) {
 		"arch":   `{"Name":"a","Version":"1.0.0","Arch":"amd64"}`,
 		"ver":    `{"Name":"a","Version":"one","Arch":"noarch"}`,
 		"dep":    `{"Name":"a","Version":"1.0.0","Arch":"noarch","PkgDependencies":{"b":"x"}}`,
+		"nover":  `{"Name":"a","Arch":"noarch"}`,
 	} {
 		if _, err := ReadPackage(writeGoo(t, dir, name+".goo", spec)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestAnyVersionDependency(t *testing.T) {
+	spec := `{"Name":"a","Version":"1.0.0","Arch":"noarch","PkgDependencies":{"b":"","c":"2.1@3"}}`
+	pkg, err := ReadPackage(writeGoo(t, t.TempDir(), "a.goo", spec))
+	if err != nil {
+		t.Fatalf("empty dependency version rejected: %v", err)
+	}
+	if pkg.Name != "a" {
+		t.Errorf("name = %q", pkg.Name)
+	}
+	if !bytes.Equal(pkg.Spec, []byte(spec)) {
+		t.Errorf("spec = %s, want %s", pkg.Spec, spec)
 	}
 }
 
