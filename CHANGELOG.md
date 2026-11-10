@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Arch: when a source holds several versions of one package (same name and architecture),
+  the publish keeps the newest, compared as pacman's `vercmp` does, and logs the older files as
+  skipped. Before, it failed, and that stopped every repo from publishing. Two different files
+  with the same version are still an error.
+
 ## [0.2.1] — 2026-11-08
 
 ### Fixed

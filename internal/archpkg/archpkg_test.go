@@ -7,6 +7,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -162,15 +163,53 @@ func TestPublish(t *testing.T) {
 	}
 }
 
-func TestPublishRejectsTwoVersions(t *testing.T) {
+func TestPublishKeepsNewestVersion(t *testing.T) {
+	// The newer file sorts first in one case and last in the other, and
+	// pkgrel 10 must beat pkgrel 9 numerically.
+	for _, names := range [][2]string{{"a.pkg.tar.gz", "b.pkg.tar.gz"}, {"b.pkg.tar.gz", "a.pkg.tar.gz"}} {
+		src, out := t.TempDir(), t.TempDir()
+		writePkg(t, src, names[0], strings.Replace(pkginfo, "1.2.3-1", "1.2.3-9", 1))
+		writePkg(t, src, names[1], strings.Replace(pkginfo, "1.2.3-1", "1.2.3-10", 1))
+		rel, _ := publish.Begin(out, time.Now())
+		var logged []string
+		env := &publish.Env{Release: rel, Now: time.Now(), Logf: func(f string, a ...any) {
+			logged = append(logged, fmt.Sprintf(f, a...))
+		}}
+		if err := Publish(config.Repo{Name: "jm2", Source: src}, env); err != nil {
+			t.Fatal(err)
+		}
+		if err := rel.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		db := readTarGz(t, filepath.Join(publish.CurrentDir(out), "arch", "jm2", "x86_64", "jm2.db"))
+		if _, ok := db["tributary-bin-1.2.3-10/desc"]; !ok {
+			t.Errorf("%v: db lacks the newest version: %v", names, db)
+		}
+		if _, ok := db["tributary-bin-1.2.3-9/desc"]; ok {
+			t.Errorf("%v: db holds the older version too", names)
+		}
+		var skips []string
+		for _, l := range logged {
+			if strings.Contains(l, "skipping") {
+				skips = append(skips, l)
+			}
+		}
+		older := filepath.Join(src, names[0])
+		if len(skips) != 1 || !strings.Contains(skips[0], "skipping "+older+":") || !strings.Contains(skips[0], "1.2.3-9 is older than 1.2.3-10") {
+			t.Errorf("%v: log = %q", names, logged)
+		}
+	}
+}
+
+func TestPublishRejectsSameVersionDifferentContents(t *testing.T) {
 	src, out := t.TempDir(), t.TempDir()
 	writePkg(t, src, "a.pkg.tar.gz", pkginfo)
-	writePkg(t, src, "b.pkg.tar.gz", strings.Replace(pkginfo, "1.2.3-1", "1.2.4-1", 1))
+	writePkg(t, src, "b.pkg.tar.gz", strings.Replace(pkginfo, "Example package", "Other package", 1))
 	rel, _ := publish.Begin(out, time.Now())
 	env := &publish.Env{Release: rel, Now: time.Now(), Logf: t.Logf}
 	err := Publish(config.Repo{Name: "jm2", Source: src}, env)
-	if err == nil || !strings.Contains(err.Error(), "one version") {
-		t.Fatalf("err = %v, want duplicate error", err)
+	if err == nil || !strings.Contains(err.Error(), "different contents") {
+		t.Fatalf("err = %v, want same-version error", err)
 	}
 }
 

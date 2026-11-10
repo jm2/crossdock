@@ -295,6 +295,11 @@ For pacman, add it with `pacman-key --add` and `--lsign-key`.
 | RPM | `rpm/<repo>/repodata/`, `rpm/<repo>/Packages/<l>/…` |
 | GooGet | `goo/<repo>/index{,.gz}`, `goo/<repo>/packages/<name>.<arch>.<ver>.goo` |
 
+A pacman database holds one version of each package. When an `arch` source has several
+versions of one name and architecture, crossdock publishes the newest (compared as pacman's
+`vercmp` does) and logs the others as skipped. The apt, RPM and GooGet repos publish every
+version. In every format, two different files with the same version stop the publish.
+
 ## Requirements
 
 None at run time. crossdock is one static binary. Signing, `crossdock
