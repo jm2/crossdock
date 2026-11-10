@@ -34,9 +34,11 @@ func Publish(repo config.Repo, env *publish.Env) error {
 	if err != nil {
 		return err
 	}
+	// pacman repos hold one version per name+arch: keep the newest and
+	// skip older ones, so a build that adds a version before the old one
+	// leaves doesn't stop every repo from publishing.
 	byKey := map[string]*entry{}
-	var entries []*entry
-	concrete := map[string]bool{}
+	var keys []string
 	for _, f := range files {
 		pkg, err := publish.Cached(env.Release, f, "arch/1", ReadPackage)
 		if err != nil {
@@ -46,16 +48,36 @@ func Publish(repo config.Repo, env *publish.Env) error {
 		if err != nil {
 			return err
 		}
-		key := pkg.Name() + "\x00" + pkg.Arch()
-		if prev, ok := byKey[key]; ok {
-			if prev.digest.SHA256 == d.SHA256 {
-				continue
-			}
-			// pacman repos hold one version per name+arch.
-			return fmt.Errorf("%s and %s both provide %s (%s); keep one version per package",
-				prev.pkg.Path, f, pkg.Name(), pkg.Arch())
-		}
 		e := &entry{pkg: pkg, file: filepath.Base(f), digest: d}
+		key := pkg.Name() + "\x00" + pkg.Arch()
+		prev, ok := byKey[key]
+		if !ok {
+			byKey[key] = e
+			keys = append(keys, key)
+			continue
+		}
+		if prev.digest.SHA256 == d.SHA256 {
+			continue
+		}
+		older, newer := prev, e
+		switch Vercmp(prev.pkg.Version(), pkg.Version()) {
+		case 0:
+			return fmt.Errorf("%s and %s are both %s %s (%s) with different contents; keep one",
+				prev.pkg.Path, f, pkg.Name(), pkg.Version(), pkg.Arch())
+		case 1:
+			older, newer = e, prev
+		}
+		byKey[key] = newer
+		if env.Logf != nil {
+			env.Logf("arch/%s: skipping %s: %s %s is older than %s",
+				repo.Name, older.pkg.Path, pkg.Name(), older.pkg.Version(), newer.pkg.Version())
+		}
+	}
+	var entries []*entry
+	concrete := map[string]bool{}
+	for _, key := range keys {
+		e := byKey[key]
+		f, pkg := e.pkg.Path, e.pkg
 		if e.sig, err = readSig(f + ".sig"); err != nil {
 			return err
 		}
@@ -68,7 +90,6 @@ func Publish(repo config.Repo, env *publish.Env) error {
 				return fmt.Errorf("signing %s: %w", f, err)
 			}
 		}
-		byKey[key] = e
 		entries = append(entries, e)
 		if pkg.Arch() != "any" {
 			concrete[pkg.Arch()] = true
