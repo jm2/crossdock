@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-11-11
+
 ### Changed
 
 - Arch: when a source holds several versions of one package (same name and architecture),
@@ -20,11 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most five rounds). Uploads that landed during a long publish used to wait for the next change,
   because `crossdock-publish.path` doesn't start the service again while it's running. Later
   rounds are quick, as unchanged packages are cached. ([#7](https://github.com/jm2/crossdock/issues/7))
-
-## [0.2.1] — 2026-11-08
-
-### Fixed
-
 - GooGet: a pkgspec dependency with an empty version is accepted as "any version", as googet
   itself does, instead of failing the publish with `empty version`.
 
