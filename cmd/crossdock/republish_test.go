@@ -104,8 +104,10 @@ func TestPublishRepeatsWhenSourcesChange(t *testing.T) {
 	}
 }
 
-// Sources that never hold still stop after maxPublishRounds, still published.
+// Sources that never hold still stop after maxPublishRounds.
 func TestPublishStopsAfterMaxRounds(t *testing.T) {
+	// A fixed time puts every round in the same second.
+	t.Setenv("SOURCE_DATE_EPOCH", "1760000000")
 	work := t.TempDir()
 	src := filepath.Join(work, "incoming")
 	os.Mkdir(src, 0o755)
@@ -124,6 +126,11 @@ func TestPublishStopsAfterMaxRounds(t *testing.T) {
 	}
 	if commits != maxPublishRounds {
 		t.Errorf("published %d times, want %d", commits, maxPublishRounds)
+	}
+	// Every round got a later release ID, so pruning keeps the newest.
+	ids, _ := os.ReadDir(filepath.Join(work, "out", "releases"))
+	if len(ids) == 0 || ids[len(ids)-1].Name() != filepath.Base(publish.CurrentDir(filepath.Join(work, "out"))) {
+		t.Errorf("the current release doesn't sort last: %v", ids)
 	}
 }
 
@@ -160,5 +167,10 @@ func TestSourceStateSeesChanges(t *testing.T) {
 	os.WriteFile(p, []byte("replaced"), 0o644)
 	if state() == s1 {
 		t.Error("a replaced package didn't change the state")
+	}
+	s2 := state()
+	os.WriteFile(p+".sig", []byte("sig"), 0o644)
+	if state() == s2 {
+		t.Error("a new signature didn't change the state")
 	}
 }

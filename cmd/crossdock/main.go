@@ -143,9 +143,17 @@ func cmdPublish(args []string) error {
 			return nil
 		}
 		logf("the sources changed during the publish; publishing again")
-		if now, err = publishTime(); err != nil {
+		next, err := publishTime()
+		if err != nil {
 			return err
 		}
+		// Release IDs start with the time in seconds, and pruning takes
+		// their order as chronological, so each round must be a second
+		// later, even within one second or with SOURCE_DATE_EPOCH.
+		if last := now.Truncate(time.Second); !next.Truncate(time.Second).After(last) {
+			next = last.Add(time.Second)
+		}
+		now = next
 	}
 }
 
@@ -186,12 +194,19 @@ func publishRelease(cfg *config.Config, env *publish.Env, now time.Time) error {
 	return err
 }
 
-// sourceState describes every package file in the configured sources by
-// path, size and modification time, so a change shows as a different string.
+// sourceState describes every package file (and Arch signature) in the
+// configured sources by path, size and modification time, so a change shows as a different string.
 func sourceState(cfg *config.Config) (string, error) {
 	var b strings.Builder
 	for _, r := range cfg.Repos {
-		files, err := publish.FindFiles(r.Source, suffixes(r.Format)...)
+		sfx := suffixes(r.Format)
+		if r.Format == config.FormatArch {
+			// A detached signature can arrive after its package was read.
+			for _, x := range archpkg.Suffixes {
+				sfx = append(sfx, x+".sig")
+			}
+		}
+		files, err := publish.FindFiles(r.Source, sfx...)
 		if err != nil {
 			return "", fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
 		}
