@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipped. Before, it failed, and that stopped every repo from publishing. Two different files
   with the same version are still an error.
 
+### Fixed
+
+- `publish` publishes again when the sources changed while it ran, until they hold still (at
+  most five rounds). Uploads that landed during a long publish used to wait for the next change,
+  because `crossdock-publish.path` doesn't start the service again while it's running. Later
+  rounds are quick, as unchanged packages are cached. ([#7](https://github.com/jm2/crossdock/issues/7))
+
 ## [0.2.1] — 2026-11-08
 
 ### Fixed
