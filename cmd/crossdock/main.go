@@ -119,11 +119,58 @@ func cmdPublish(args []string) error {
 	if err := publish.Lock(cfg.Output, logf); err != nil {
 		return err
 	}
+	// Uploads can land while a publish runs, and a systemd path unit doesn't
+	// start the service again for them, so publish until the sources hold
+	// still. Rounds after the first are quick: unchanged files are cached.
+	for round := 1; ; round++ {
+		before, err := sourceState(cfg)
+		if err != nil {
+			return err
+		}
+		if err := publishRelease(cfg, env, now); err != nil {
+			return err
+		}
+		after, err := sourceState(cfg)
+		if err != nil {
+			log.Printf("warning: can't check the sources for changes: %v", err)
+			return nil
+		}
+		if after == before {
+			return nil
+		}
+		if round == maxPublishRounds {
+			log.Printf("warning: the sources changed during each of %d publishes; the next publish will pick up the rest", round)
+			return nil
+		}
+		logf("the sources changed during the publish; publishing again")
+		next, err := publishTime()
+		if err != nil {
+			return err
+		}
+		// Release IDs start with the time in seconds, and pruning takes
+		// their order as chronological, so each round must be a second
+		// later, even within one second or with SOURCE_DATE_EPOCH.
+		if last := now.Truncate(time.Second); !next.Truncate(time.Second).After(last) {
+			next = last.Add(time.Second)
+		}
+		now = next
+	}
+}
+
+// maxPublishRounds bounds how often publish starts over for sources that
+// changed while it ran.
+const maxPublishRounds = 5
+
+// testHookBeforeCommit lets tests change the sources during a publish.
+var testHookBeforeCommit func()
+
+// publishRelease builds every repo into a new release and swaps it in.
+func publishRelease(cfg *config.Config, env *publish.Env, now time.Time) error {
 	rel, err := publish.Begin(cfg.Output, now)
 	if err != nil {
 		return err
 	}
-	env.Release = rel
+	env.Now, env.Release = now, rel
 	rel.Logf = log.Printf // warnings still show with -q
 	if cfg.NoSymlinks {
 		rel.NoSymlinks()
@@ -132,16 +179,61 @@ func cmdPublish(args []string) error {
 		rel.Abort()
 		return err
 	}
+	if testHookBeforeCommit != nil {
+		testHookBeforeCommit()
+	}
 	if err := rel.Commit(); err != nil {
 		rel.Abort()
 		return err
 	}
-	logf("published release %s", rel.ID)
+	env.Logf("published release %s", rel.ID)
 	removed, err := publish.Prune(cfg.Output, cfg.KeepReleases)
 	for _, id := range removed {
-		logf("pruned release %s", id)
+		env.Logf("pruned release %s", id)
 	}
 	return err
+}
+
+// sourceState describes every package file (and Arch signature) in the
+// configured sources by path, size and modification time, so a change shows as a different string.
+func sourceState(cfg *config.Config) (string, error) {
+	var b strings.Builder
+	for _, r := range cfg.Repos {
+		sfx := suffixes(r.Format)
+		if r.Format == config.FormatArch {
+			// A detached signature can arrive after its package was read.
+			for _, x := range archpkg.Suffixes {
+				sfx = append(sfx, x+".sig")
+			}
+		}
+		files, err := publish.FindFiles(r.Source, sfx...)
+		if err != nil {
+			return "", fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
+		}
+		for _, f := range files {
+			fi, err := os.Stat(f)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "%s\x00%d\x00%d\n", f, fi.Size(), fi.ModTime().UnixNano())
+		}
+	}
+	return b.String(), nil
+}
+
+// suffixes lists the package file names a format publishes.
+func suffixes(f config.Format) []string {
+	switch f {
+	case config.FormatDeb:
+		return []string{".deb"}
+	case config.FormatArch:
+		return archpkg.Suffixes
+	case config.FormatRPM:
+		return rpm.Suffixes
+	case config.FormatGoo:
+		return goo.Suffixes
+	}
+	return nil
 }
 
 // checkNotEmpty refuses to empty a repo that has packages. An empty source
@@ -149,18 +241,8 @@ func cmdPublish(args []string) error {
 // would take the packages away from every client. A repo that has never had
 // packages may stay empty, and allow_empty lets one be emptied on purpose.
 func checkNotEmpty(r config.Repo, env *publish.Env) error {
-	var suffixes []string
-	switch r.Format {
-	case config.FormatDeb:
-		suffixes = []string{".deb"}
-	case config.FormatArch:
-		suffixes = archpkg.Suffixes
-	case config.FormatRPM:
-		suffixes = rpm.Suffixes
-	case config.FormatGoo:
-		suffixes = goo.Suffixes
-	}
-	files, err := publish.FindFiles(r.Source, suffixes...)
+	sfx := suffixes(r.Format)
+	files, err := publish.FindFiles(r.Source, sfx...)
 	if err != nil {
 		return err
 	}
@@ -168,7 +250,7 @@ func checkNotEmpty(r config.Repo, env *publish.Env) error {
 		return nil
 	}
 	key := string(r.Format) + "/" + r.Name
-	prev, err := env.Release.PreviousPackages(key, suffixes...)
+	prev, err := env.Release.PreviousPackages(key, sfx...)
 	if err != nil {
 		return err
 	}
