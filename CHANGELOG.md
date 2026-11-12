@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Publish no longer fails when a package is replaced or removed while it reads the sources
+  (an upload swapping one version for the next). If the sources changed, the failed round is
+  dropped and publish runs again, up to the same limit of rounds as for other changes.
+
 ## [0.2.1] — 2026-11-11
 
 ### Changed
