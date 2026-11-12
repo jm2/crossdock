@@ -26,7 +26,7 @@ binary, with no distro tooling (`reprepro`, `createrepo_c`, `repo-add`,
 Only current releases: Debian stable (13) and newer, Fedora 44 and 45,
 EL10.2 and newer, Arch, and Windows for GooGet. No compatibility code for
 older clients. Dependencies and the Go toolchain track the latest releases
-(`go 1.27.3`). The one deliberate exception is the key format.
+(`go 1.27.4`). The one deliberate exception is the key format.
 Signing keys stay v4 Ed25519 with SHA-512 signatures, because GnuPG
 (pacman, and gpgme in EL10's librepo) rejects RFC 9580 v6 keys; apt's sqv
 and rpm-sequoia would accept them.

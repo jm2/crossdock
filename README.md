@@ -310,7 +310,7 @@ YAML config ([goccy/go-yaml](https://github.com/goccy/go-yaml)) are all
 native Go. `gpg` is needed only for `gnupg_home` signing, so the packages
 only suggest it.
 
-Building needs Go 1.27.3 or newer (`go.mod`). Older `go` commands fetch it
+Building needs Go 1.27.4 or newer (`go.mod`). Older `go` commands fetch it
 themselves with `GOTOOLCHAIN=auto`.
 
 ## Development
