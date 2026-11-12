@@ -128,21 +128,28 @@ func cmdPublish(args []string) error {
 			return err
 		}
 		if err := publishRelease(cfg, env, now); err != nil {
-			return err
+			// A file replaced or removed mid-publish (an upload swapping
+			// one version for the next) fails the read; if the sources
+			// changed, that's the cause, so publish them again.
+			if after, serr := sourceState(cfg); serr != nil || after == before || round == maxPublishRounds {
+				return err
+			}
+			log.Printf("warning: %v; the sources changed during the publish, publishing again", err)
+		} else {
+			after, err := sourceState(cfg)
+			if err != nil {
+				log.Printf("warning: can't check the sources for changes: %v", err)
+				return nil
+			}
+			if after == before {
+				return nil
+			}
+			if round == maxPublishRounds {
+				log.Printf("warning: the sources changed during each of %d publishes; the next publish will pick up the rest", round)
+				return nil
+			}
+			logf("the sources changed during the publish; publishing again")
 		}
-		after, err := sourceState(cfg)
-		if err != nil {
-			log.Printf("warning: can't check the sources for changes: %v", err)
-			return nil
-		}
-		if after == before {
-			return nil
-		}
-		if round == maxPublishRounds {
-			log.Printf("warning: the sources changed during each of %d publishes; the next publish will pick up the rest", round)
-			return nil
-		}
-		logf("the sources changed during the publish; publishing again")
 		next, err := publishTime()
 		if err != nil {
 			return err
@@ -161,8 +168,9 @@ func cmdPublish(args []string) error {
 // changed while it ran.
 const maxPublishRounds = 5
 
-// testHookBeforeCommit lets tests change the sources during a publish.
-var testHookBeforeCommit func()
+// testHookBeforeCommit lets tests change the sources during a publish, or
+// fail it.
+var testHookBeforeCommit func() error
 
 // publishRelease builds every repo into a new release and swaps it in.
 func publishRelease(cfg *config.Config, env *publish.Env, now time.Time) error {
@@ -180,7 +188,10 @@ func publishRelease(cfg *config.Config, env *publish.Env, now time.Time) error {
 		return err
 	}
 	if testHookBeforeCommit != nil {
-		testHookBeforeCommit()
+		if err := testHookBeforeCommit(); err != nil {
+			rel.Abort()
+			return err
+		}
 	}
 	if err := rel.Commit(); err != nil {
 		rel.Abort()

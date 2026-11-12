@@ -86,10 +86,11 @@ func TestPublishRepeatsWhenSourcesChange(t *testing.T) {
 	cfg := writeConfig(t, work)
 
 	commits := 0
-	testHookBeforeCommit = func() {
+	testHookBeforeCommit = func() error {
 		if commits++; commits == 1 {
 			writeArchPkg(t, src, "late")
 		}
+		return nil
 	}
 	defer func() { testHookBeforeCommit = nil }()
 
@@ -115,9 +116,10 @@ func TestPublishStopsAfterMaxRounds(t *testing.T) {
 	cfg := writeConfig(t, work)
 
 	commits := 0
-	testHookBeforeCommit = func() {
+	testHookBeforeCommit = func() error {
 		commits++
 		writeArchPkg(t, src, "pkg"+strings.Repeat("x", commits))
+		return nil
 	}
 	defer func() { testHookBeforeCommit = nil }()
 
@@ -131,6 +133,60 @@ func TestPublishStopsAfterMaxRounds(t *testing.T) {
 	ids, _ := os.ReadDir(filepath.Join(work, "out", "releases"))
 	if len(ids) == 0 || ids[len(ids)-1].Name() != filepath.Base(publish.CurrentDir(filepath.Join(work, "out"))) {
 		t.Errorf("the current release doesn't sort last: %v", ids)
+	}
+}
+
+// A package replaced while a publish reads the sources fails that round's
+// read; publish starts over instead of failing.
+func TestPublishRetriesWhenASourceVanishes(t *testing.T) {
+	work := t.TempDir()
+	src := filepath.Join(work, "incoming")
+	os.Mkdir(src, 0o755)
+	old := writeArchPkg(t, src, "first")
+	cfg := writeConfig(t, work)
+
+	rounds := 0
+	testHookBeforeCommit = func() error {
+		if rounds++; rounds == 1 {
+			os.Remove(old)
+			writeArchPkg(t, src, "second")
+			return &os.PathError{Op: "open", Path: old, Err: os.ErrNotExist}
+		}
+		return nil
+	}
+	defer func() { testHookBeforeCommit = nil }()
+
+	if err := cmdPublish([]string{"-q", "-allow-unsigned", "-c", cfg}); err != nil {
+		t.Fatal(err)
+	}
+	if rounds != 2 {
+		t.Errorf("ran %d rounds, want 2", rounds)
+	}
+	if db := servedDB(t, work); !strings.Contains(db, "second-1-1") || strings.Contains(db, "first-1-1") {
+		t.Errorf("served db: %s", db)
+	}
+}
+
+// A failure with unchanged sources is still an error.
+func TestPublishFailsWhenSourcesHold(t *testing.T) {
+	work := t.TempDir()
+	src := filepath.Join(work, "incoming")
+	os.Mkdir(src, 0o755)
+	writeArchPkg(t, src, "first")
+	cfg := writeConfig(t, work)
+
+	rounds := 0
+	testHookBeforeCommit = func() error {
+		rounds++
+		return os.ErrInvalid
+	}
+	defer func() { testHookBeforeCommit = nil }()
+
+	if err := cmdPublish([]string{"-q", "-allow-unsigned", "-c", cfg}); err == nil {
+		t.Fatal("publish succeeded")
+	}
+	if rounds != 1 {
+		t.Errorf("ran %d rounds, want 1", rounds)
 	}
 }
 
