@@ -54,6 +54,15 @@ func writeConfig(t *testing.T, work string) string {
 	return p
 }
 
+// setHook installs testHookBeforeCommit for one test and restores the
+// previous hook afterwards.
+func setHook(t *testing.T, f func() error) {
+	t.Helper()
+	prev := testHookBeforeCommit
+	testHookBeforeCommit = f
+	t.Cleanup(func() { testHookBeforeCommit = prev })
+}
+
 func servedDB(t *testing.T, work string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(publish.CurrentDir(filepath.Join(work, "out")), "arch", "local", "x86_64", "local.db"))
@@ -86,13 +95,12 @@ func TestPublishRepeatsWhenSourcesChange(t *testing.T) {
 	cfg := writeConfig(t, work)
 
 	commits := 0
-	testHookBeforeCommit = func() error {
+	setHook(t, func() error {
 		if commits++; commits == 1 {
 			writeArchPkg(t, src, "late")
 		}
 		return nil
-	}
-	defer func() { testHookBeforeCommit = nil }()
+	})
 
 	if err := cmdPublish([]string{"-q", "-allow-unsigned", "-c", cfg}); err != nil {
 		t.Fatal(err)
@@ -116,12 +124,11 @@ func TestPublishStopsAfterMaxRounds(t *testing.T) {
 	cfg := writeConfig(t, work)
 
 	commits := 0
-	testHookBeforeCommit = func() error {
+	setHook(t, func() error {
 		commits++
 		writeArchPkg(t, src, "pkg"+strings.Repeat("x", commits))
 		return nil
-	}
-	defer func() { testHookBeforeCommit = nil }()
+	})
 
 	if err := cmdPublish([]string{"-q", "-allow-unsigned", "-c", cfg}); err != nil {
 		t.Fatal(err)
@@ -146,15 +153,14 @@ func TestPublishRetriesWhenASourceVanishes(t *testing.T) {
 	cfg := writeConfig(t, work)
 
 	rounds := 0
-	testHookBeforeCommit = func() error {
+	setHook(t, func() error {
 		if rounds++; rounds == 1 {
 			os.Remove(old)
 			writeArchPkg(t, src, "second")
 			return &os.PathError{Op: "open", Path: old, Err: os.ErrNotExist}
 		}
 		return nil
-	}
-	defer func() { testHookBeforeCommit = nil }()
+	})
 
 	if err := cmdPublish([]string{"-q", "-allow-unsigned", "-c", cfg}); err != nil {
 		t.Fatal(err)
@@ -176,11 +182,10 @@ func TestPublishFailsWhenSourcesHold(t *testing.T) {
 	cfg := writeConfig(t, work)
 
 	rounds := 0
-	testHookBeforeCommit = func() error {
+	setHook(t, func() error {
 		rounds++
 		return os.ErrInvalid
-	}
-	defer func() { testHookBeforeCommit = nil }()
+	})
 
 	if err := cmdPublish([]string{"-q", "-allow-unsigned", "-c", cfg}); err == nil {
 		t.Fatal("publish succeeded")
