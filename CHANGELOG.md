@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Release builds for Windows on arm64 (`crossdock-<version>-windows-arm64.zip`).
+
 ## [0.2.2] — 2026-11-12
 
 ### Fixed
