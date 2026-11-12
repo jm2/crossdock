@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          for target in linux-amd64 linux-arm64 darwin-arm64 windows-amd64; do
+          for target in linux-amd64 linux-arm64 darwin-arm64 windows-amd64 windows-arm64; do
             name="crossdock-${GITHUB_REF_NAME}-${target}"
             stage="stage/$name"
             mkdir -p "$stage"
@@ -285,6 +285,7 @@ jobs:
             "crossdock-${GITHUB_REF_NAME}-linux-arm64.tar.gz"
             "crossdock-${GITHUB_REF_NAME}-darwin-arm64.tar.gz"
             "crossdock-${GITHUB_REF_NAME}-windows-amd64.zip"
+            "crossdock-${GITHUB_REF_NAME}-windows-arm64.zip"
             crossdock-amd64.deb
             crossdock-arm64.deb
             crossdock-x86_64.rpm
