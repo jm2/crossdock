@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Windows on ARM: releases include `crossdock-<version>-windows-arm64.zip`.
+
+### Security
+
+- Builds use Go 1.27.4, which fixes GO-2026-6859 in `net/http`.
+
 ## [0.2.2] — 2026-11-12
 
 ### Fixed
