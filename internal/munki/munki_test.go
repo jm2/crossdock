@@ -453,6 +453,8 @@ func TestPublish(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v (run go test -update to create it)", err)
 		}
+		// A Windows checkout may have CRLF line endings.
+		want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
 		if got := readOut(t, rel, "munki/games/"+f); !bytes.Equal(got, want) {
 			t.Errorf("%s differs from testdata (go test -update rewrites it):\n%s", f, got)
 		}
