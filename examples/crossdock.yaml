@@ -24,3 +24,10 @@ repos:
     component: main
     architectures: [amd64, arm64]        # "all" packages land in each
     description: jm2 packages
+
+  - name: jm2
+    format: munki                        # macOS disk images + pkginfo sidecars
+    source: /srv/crossdock/incoming/munki
+    catalog: production                  # for sidecars without catalogs
+    site_default: true                   # also manifests/site_default
+    # manifests_source: /srv/crossdock/incoming/munki-manifests

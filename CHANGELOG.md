@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Munki repositories** for macOS. `format: munki` publishes `munki/<repo>/` from disk
+  images (`<file>.dmg`) and pkginfo sidecars (`<file>.dmg.pkginfo`, as `makepkginfo` writes
+  them) for Munki's `copy_from_dmg` installs, with optional icons (`<file>.dmg.png`). It writes
+  `catalogs/` as Munki's `makecatalogs` does (CI compares them with Munki 7.4's Linux build),
+  `pkgsinfo/`, `icons/_icon_hashes.plist`, a manifest offering every item (`manifests/<repo>`,
+  and `manifests/site_default` with `site_default: true`), and hand-written manifests from
+  `manifests_source`. crossdock checks each image's UDIF trailer and never reads inside it;
+  it sets `installer_item_location`, `installer_item_hash` and `installer_item_size`, refuses
+  `PackageURL`, and passes everything else through. A disk image without a sidecar is
+  published for download only. CI installs, upgrades and removes an item with the real Munki
+  client on macOS, including a resumed download and a disk image refused on its hash.
+- `crossdock inspect` reads `.dmg` files: the UDIF trailer and the pkginfo publish would write.
+
 - **Browseable repos.** Every publish writes a landing page (`index.html` at the release root)
   with the signing key's fingerprint and a ready-to-paste setup snippet for each repo (apt,
   pacman, dnf, GooGet), and an `index.html` per repo listing each package's version,
@@ -31,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-index=false` turns listings off for one `serve` or `nginx-config` run.
 - `nginx-config` needs `ngx_http_sub_module` (`sub_filter`), which the Debian, Fedora, EL,
   Arch and nginx.org packages include, and serves `index.html` for directories.
+- The packages create and watch `/var/lib/crossdock/incoming/munki`, and the packaged config
+  has a commented-out munki repo.
 
 ## [0.2.3] — 2026-11-12
 

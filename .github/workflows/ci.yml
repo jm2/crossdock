@@ -79,6 +79,20 @@ jobs:
         if: runner.os == 'Linux'
         run: pip install --break-system-packages createrepo_c
 
+      # Munki builds makecatalogs for Linux (x86-64, static). With it, the
+      # Munki tests check crossdock's catalogs against makecatalogs' own.
+      - name: Install Munki's makecatalogs
+        if: runner.os == 'Linux'
+        env:
+          URL: https://github.com/munki/munki/releases/download/v7.4.2/makecatalogs_for_linux.zip
+          SHA256: fad555f158cf63074b0676bcd9428a7ce4c714b2eb3f64ad8cce1bd38c513fe8
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/makecatalogs.zip" "$URL"
+          echo "$SHA256  $RUNNER_TEMP/makecatalogs.zip" | sha256sum -c
+          unzip -q -j "$RUNNER_TEMP/makecatalogs.zip" makecatalogs -d "$RUNNER_TEMP/munki"
+          chmod +x "$RUNNER_TEMP/munki/makecatalogs"
+          echo "MAKECATALOGS=$RUNNER_TEMP/munki/makecatalogs" >> "$GITHUB_ENV"
+
       # On Linux the apt end-to-end test runs against the runner's real
       # dpkg-deb and apt-get; elsewhere it skips itself.
       - name: Test
@@ -164,6 +178,41 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           go build -o /usr/local/bin/crossdock ./cmd/crossdock
           build-aux/ci/pacman-smoke.sh
+
+  # The real Munki client against a munki repo served by `crossdock serve`:
+  # it installs, upgrades and removes a copy_from_dmg item built with
+  # hdiutil, resumes a cut-off download, and refuses a disk image that
+  # doesn't match its catalog hash.
+  munki:
+    name: Munki against crossdock (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download munkitools
+        env:
+          URL: https://github.com/munki/munki/releases/download/v7.4.2/munkitools-7.4.2.5904.pkg
+          SHA256: 1e37e2fc1b7babe687ac4f5833c875e458876bea611d4baf073e3a288e4e1d22
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/munkitools.pkg" "$URL"
+          echo "$SHA256  $RUNNER_TEMP/munkitools.pkg" | shasum -a 256 -c
+          pkgutil --check-signature "$RUNNER_TEMP/munkitools.pkg"
+
+      - name: Publish, serve and use the repo with Munki
+        run: |
+          go build -o "$RUNNER_TEMP/crossdock" ./cmd/crossdock
+          CROSSDOCK="$RUNNER_TEMP/crossdock" MUNKITOOLS="$RUNNER_TEMP/munkitools.pkg" build-aux/ci/munki-smoke.sh
+
+      - name: Munki's log
+        if: failure()
+        run: sudo cat "/Library/Managed Installs/Logs/ManagedSoftwareUpdate.log" || true
 
   # Builds the .deb, installs it, and runs crossdock the packaged way under
   # the runner's real systemd: path-triggered publishing, the LAN server on

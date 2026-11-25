@@ -2,7 +2,7 @@
 // Copyright (C) 2026 John-Michael and crossdock contributors
 
 // Command crossdock publishes package artifacts as signed apt, pacman, RPM
-// and GooGet repositories.
+// and GooGet repositories, and Munki repositories of macOS disk images.
 package main
 
 import (
@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/jm2/crossdock/internal/config"
 	"github.com/jm2/crossdock/internal/deb"
 	"github.com/jm2/crossdock/internal/goo"
+	"github.com/jm2/crossdock/internal/munki"
 	"github.com/jm2/crossdock/internal/pages"
 	"github.com/jm2/crossdock/internal/publish"
 	"github.com/jm2/crossdock/internal/rpm"
@@ -207,21 +209,34 @@ func publishRelease(cfg *config.Config, env *publish.Env, now time.Time) error {
 	return err
 }
 
-// sourceState describes every package file (and Arch signature) in the
-// configured sources by path, size and modification time, so a change shows as a different string.
+// sourceState describes every package file in the configured sources, and
+// the files that go with them (Arch signatures, Munki sidecars and
+// manifests), by path, size and modification time, so a change shows as a
+// different string.
 func sourceState(cfg *config.Config) (string, error) {
 	var b strings.Builder
 	for _, r := range cfg.Repos {
+		// A detached signature or a sidecar can arrive after its package
+		// was read.
 		sfx := suffixes(r.Format)
-		if r.Format == config.FormatArch {
-			// A detached signature can arrive after its package was read.
+		switch r.Format {
+		case config.FormatArch:
 			for _, x := range archpkg.Suffixes {
 				sfx = append(sfx, x+".sig")
 			}
+		case config.FormatMunki:
+			sfx = append(sfx, munki.SidecarSuffixes...)
 		}
 		files, err := publish.FindFiles(r.Source, sfx...)
 		if err != nil {
 			return "", fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
+		}
+		if r.ManifestsSource != "" {
+			m, err := publish.FindFiles(r.ManifestsSource, "")
+			if err != nil {
+				return "", fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
+			}
+			files = append(files, m...)
 		}
 		for _, f := range files {
 			fi, err := os.Stat(f)
@@ -245,6 +260,8 @@ func suffixes(f config.Format) []string {
 		return rpm.Suffixes
 	case config.FormatGoo:
 		return goo.Suffixes
+	case config.FormatMunki:
+		return munki.Suffixes
 	}
 	return nil
 }
@@ -313,6 +330,8 @@ func build(cfg *config.Config, env *publish.Env) error {
 			err = rpm.Publish(r, env)
 		case config.FormatGoo:
 			err = goo.Publish(r, env)
+		case config.FormatMunki:
+			err = munki.Publish(r, env)
 		default:
 			err = fmt.Errorf("unknown format %q", r.Format)
 		}
@@ -390,6 +409,12 @@ func cmdInspect(args []string) error {
 			}
 			out = map[string]any{"format": "goo", "path": p, "name": pkg.Name, "version": pkg.Version,
 				"arch": pkg.Arch, "pkgspec": pkg.Spec}
+		case strings.HasSuffix(p, ".dmg"):
+			m, err := inspectDMG(p)
+			if err != nil {
+				return err
+			}
+			out = m
 		default:
 			return fmt.Errorf("%s: unrecognized package type", p)
 		}
@@ -398,6 +423,42 @@ func cmdInspect(args []string) error {
 		}
 	}
 	return nil
+}
+
+// inspectDMG describes a disk image and its pkginfo sidecar, if any. The
+// pkginfo shows the keys publish sets from the file, except
+// installer_item_hash, which takes a full read, and the repo's catalog.
+func inspectDMG(p string) (map[string]any, error) {
+	t, err := munki.ReadTrailer(p)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]any{"format": "munki", "path": p, "size": fi.Size(), "udif": t}
+	data, err := os.ReadFile(p + munki.PkginfoSuffix)
+	if errors.Is(err, os.ErrNotExist) {
+		m["pkginfo"] = nil
+		m["warnings"] = []string{"no " + munki.PkginfoSuffix + " sidecar: published for download only"}
+		return m, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	pi, err := munki.ParsePkginfo(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", p+munki.PkginfoSuffix, err)
+	}
+	icon := ""
+	if _, err := os.Stat(p + munki.IconSuffix); err == nil {
+		icon = pi.Name + munki.IconSuffix
+	}
+	info := pi.Published(pi.Name+"/"+filepath.Base(p), "", fi.Size(), icon, "")
+	delete(info, "installer_item_hash")
+	m["name"], m["version"], m["pkginfo"], m["warnings"] = pi.Name, pi.Version, info, pi.Warnings
+	return m, nil
 }
 
 func isArch(p string) bool {

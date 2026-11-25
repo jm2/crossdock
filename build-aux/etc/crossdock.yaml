@@ -40,3 +40,13 @@ repos:
   - name: local
     format: goo
     source: /var/lib/crossdock/incoming/goo
+
+  # macOS disk images for Munki: <file>.dmg, with a <file>.dmg.pkginfo
+  # sidecar (a pkginfo, as makepkginfo writes it) to put it in the
+  # catalogs, and an optional <file>.dmg.png icon. Munki catalogs aren't
+  # signed: serve this over HTTPS or a tailnet.
+  # - name: local
+  #   format: munki
+  #   source: /var/lib/crossdock/incoming/munki
+  #   catalog: production
+  #   site_default: true

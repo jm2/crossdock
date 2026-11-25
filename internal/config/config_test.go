@@ -16,11 +16,14 @@ func TestLoadExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Repos) != 2 || c.Repos[1].Codename != "stable" || c.Repos[1].Origin != "jm2" {
+	if len(c.Repos) != 3 || c.Repos[1].Codename != "stable" || c.Repos[1].Origin != "jm2" {
 		t.Errorf("defaults not applied: %+v", c.Repos[1])
 	}
 	if got := c.Repos[0].Architectures; len(got) != 2 || got[1] != "aarch64" || c.Repos[0].SignPackages {
 		t.Errorf("arch repo: %+v", c.Repos[0])
+	}
+	if m := c.Repos[2]; m.Format != FormatMunki || m.Catalog != "production" || !m.SiteDefault {
+		t.Errorf("munki repo: %+v", m)
 	}
 }
 
@@ -102,12 +105,36 @@ func TestLoadErrors(t *testing.T) {
 		"url quote":     `{"output":"o","serve":{"public_url":"https://repo.example/it's"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
 		"url space":     `{"output":"o","serve":{"public_url":"https://repo.example/a b"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
 		"url dollar":    `{"output":"o","serve":{"public_url":"https://repo.example/$HOME"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		// munki settings
+		"catalog on deb":      `{"output":"o","repos":[{"name":"a","format":"deb","source":"s","catalog":"production"}]}`,
+		"site_default on rpm": `{"output":"o","repos":[{"name":"a","format":"rpm","source":"s","site_default":true}]}`,
+		"manifests on goo":    `{"output":"o","repos":[{"name":"a","format":"goo","source":"s","manifests_source":"m"}]}`,
+		"munki archs":         `{"output":"o","repos":[{"name":"a","format":"munki","source":"s","architectures":["arm64"]}]}`,
+		"catalog all":         `{"output":"o","repos":[{"name":"a","format":"munki","source":"s","catalog":"all"}]}`,
+		"catalog path":        `{"output":"o","repos":[{"name":"a","format":"munki","source":"s","catalog":"../x"}]}`,
+		"manifests in source": `{"output":"o","repos":[{"name":"a","format":"munki","source":"s","manifests_source":"s/"}]}`,
 	} {
 		p := filepath.Join(t.TempDir(), "c.json")
 		os.WriteFile(p, []byte(body), 0o644)
 		if _, err := Load(p); err == nil {
 			t.Errorf("%s: Load succeeded", name)
 		}
+	}
+}
+
+func TestMunkiDefaults(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "c.yaml")
+	os.WriteFile(p, []byte("output: out\nrepos:\n  - {name: games, format: munki, source: in, manifests_source: m}\n  - {name: t, format: munki, source: in2, catalog: testing, site_default: true}\n"), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := c.Repos[0]; r.Catalog != DefaultCatalog || r.SiteDefault || r.ManifestsSource != filepath.Join(dir, "m") {
+		t.Errorf("defaults: %+v", r)
+	}
+	if r := c.Repos[1]; r.Catalog != "testing" || !r.SiteDefault || r.ManifestsSource != "" {
+		t.Errorf("explicit: %+v", r)
 	}
 }
 

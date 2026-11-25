@@ -25,7 +25,11 @@ type Rule struct {
 	// DefaultType is the Content-Type for files whose extension is not in
 	// Types (e.g. InRelease, Packages). Empty means application/octet-stream.
 	DefaultType string
-	re          *regexp.Regexp
+	// ForceType serves every file the rule matches as DefaultType,
+	// whatever its extension, for directories whose file names come from
+	// uploaded metadata.
+	ForceType bool
+	re        *regexp.Regexp
 }
 
 const (
@@ -37,6 +41,17 @@ const (
 
 // Rules is the shared serving policy.
 var Rules = []*Rule{
+	{
+		// Munki's catalogs, manifests and pkginfo change on every publish,
+		// like any repo index, and are XML property lists. Catalog and
+		// manifest names come from uploaded files, so an extension in one
+		// doesn't pick the type. First, so no other rule sees these paths.
+		Name:         "munki",
+		Pattern:      `(^/munki/[^/]+/(catalogs|manifests|pkgsinfo)/|^/munki/[^/]+/icons/_icon_hashes\.plist$)`,
+		CacheControl: cacheRevalidate,
+		DefaultType:  "application/xml",
+		ForceType:    true,
+	},
 	{
 		// Content-addressed paths never change: apt's by-hash, and rpm-md
 		// metadata files named <sha256>-<kind>.xml.gz.
@@ -61,7 +76,7 @@ var Rules = []*Rule{
 		// that reuses a version would change content, so cache for a day
 		// rather than forever.
 		Name:         "package",
-		Pattern:      `\.(deb|rpm|goo|pkg\.tar|pkg\.tar\.(zst|xz|gz|bz2))(\.sig)?$`,
+		Pattern:      `\.(deb|rpm|goo|dmg|pkg\.tar|pkg\.tar\.(zst|xz|gz|bz2))(\.sig)?$`,
 		CacheControl: cachePackage,
 	},
 	{
@@ -76,6 +91,9 @@ var Types = map[string]string{
 	"deb":   "application/vnd.debian.binary-package",
 	"rpm":   "application/x-rpm",
 	"goo":   "application/gzip", // a gzip-compressed tarball
+	"dmg":   "application/x-apple-diskimage",
+	"plist": "application/xml",
+	"png":   "image/png",
 	"zst":   "application/zstd",
 	"xz":    "application/x-xz",
 	"gz":    "application/gzip",
@@ -109,6 +127,9 @@ func Match(urlPath string) *Rule {
 
 // ContentType picks the Content-Type for a request path.
 func ContentType(urlPath string, r *Rule) string {
+	if r.ForceType {
+		return r.DefaultType
+	}
 	base := path.Base(urlPath)
 	if i := strings.LastIndexByte(base, '.'); i >= 0 {
 		if t, ok := Types[base[i+1:]]; ok {

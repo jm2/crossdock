@@ -150,13 +150,17 @@ type repoPage struct {
 	Common
 	Dir      string // "<format>/<name>"
 	Name     string
-	Client   string // "apt", "pacman", "dnf", "GooGet"
+	Client   string // "apt", "pacman", "dnf", "GooGet", "Munki"
 	Snippet  string
 	Notes    []string
 	Count    int
 	Size     string
 	Groups   []group
 	SumsName string
+	// SumCmd checks SHA256SUMS: sha256sum, or shasum on macOS.
+	SumCmd string
+	// ByHand is advice on using a file downloaded by hand.
+	ByHand []string
 	// SumsByPath is set when SHA256SUMS names some files by their path in
 	// the repo (two different files share a name).
 	SumsByPath bool
@@ -184,7 +188,18 @@ type row struct {
 
 func buildRepo(r config.Repo, files []publish.PackageFile, c Common) repoPage {
 	dir := string(r.Format) + "/" + r.Name
-	p := repoPage{Common: c, Dir: dir, Name: r.Name, SumsName: SumsName}
+	p := repoPage{Common: c, Dir: dir, Name: r.Name, SumsName: SumsName, SumCmd: "sha256sum"}
+	if r.Format == config.FormatMunki {
+		p.SumCmd = "shasum -a 256"
+		open := "Then open the disk image and drag its contents into place."
+		if c.Signed {
+			open = "On a Mac, gpgv comes with GnuPG (brew install gnupg). " + open
+		}
+		p.ByHand = []string{
+			open,
+			"On macOS 15 and later, an app that isn't notarized, copied from a downloaded disk image, needs Open Anyway in System Settings > Privacy & Security before it first runs. Munki installs don't.",
+		}
+	}
 	// A pacman "any" package is one package in several directories: count
 	// it, and its size, once.
 	pkgs, blobs := map[string]bool{}, map[string]bool{}
@@ -397,6 +412,18 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 		return "GooGet", b.String(), []string{
 			"GooGet has no index signatures: serve it over HTTPS, or keep it on a trusted LAN. It skips http:// repos unless googet.conf sets allowunsafeurl: true.",
 		}
+	case config.FormatMunki:
+		l("sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL ", repoURL)
+		l("sudo defaults write /Library/Preferences/ManagedInstalls ClientIdentifier ", r.Name)
+		l("sudo /usr/local/munki/managedsoftwareupdate --checkonly")
+		notes := []string{
+			"Install munkitools 7 (github.com/munki/munki/releases) first. Every item here is an optional install in Managed Software Center.",
+		}
+		if r.SiteDefault {
+			notes = append(notes, "A Mac without a matching ClientIdentifier gets the same list, from manifests/site_default.")
+		}
+		notes = append(notes, "Munki catalogs aren't signed, and a pkginfo can run scripts as root: reach this repo over HTTPS or a tailnet, not plain HTTP on a shared network. Disk images without a pkginfo are listed for download only.")
+		return "Munki", b.String(), notes
 	}
 	return string(r.Format), "", nil
 }

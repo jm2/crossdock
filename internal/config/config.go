@@ -26,11 +26,15 @@ import (
 type Format string
 
 const (
-	FormatDeb  Format = "deb"
-	FormatArch Format = "arch"
-	FormatRPM  Format = "rpm"
-	FormatGoo  Format = "goo"
+	FormatDeb   Format = "deb"
+	FormatArch  Format = "arch"
+	FormatRPM   Format = "rpm"
+	FormatGoo   Format = "goo"
+	FormatMunki Format = "munki"
 )
+
+// DefaultCatalog is a munki repo's catalog when it sets none.
+const DefaultCatalog = "production"
 
 // Config is the top-level crossdock configuration.
 type Config struct {
@@ -130,6 +134,18 @@ type Repo struct {
 	// packages, and sign at build time (makepkg --sign) if clients need
 	// package signatures.
 	SignPackages bool `yaml:"sign_packages,omitempty"`
+
+	// munki
+	// Catalog is the catalog for pkginfo sidecars that don't list any
+	// (default "production").
+	Catalog string `yaml:"catalog,omitempty"`
+	// SiteDefault also publishes the repo's manifest as
+	// manifests/site_default, which Munki clients fall back to when no
+	// manifest matches their ClientIdentifier.
+	SiteDefault bool `yaml:"site_default,omitempty"`
+	// ManifestsSource is a directory of hand-written manifests, published
+	// as they are after checking.
+	ManifestsSource string `yaml:"manifests_source,omitempty"`
 }
 
 // ValidDuration parses ValidFor: a Go duration, or a number of days with
@@ -209,6 +225,7 @@ func (c *Config) resolve(base string) {
 	}
 	for i := range c.Repos {
 		c.Repos[i].Source = abs(base, c.Repos[i].Source)
+		c.Repos[i].ManifestsSource = abs(base, c.Repos[i].ManifestsSource)
 	}
 }
 
@@ -226,6 +243,9 @@ func (c *Config) applyDefaults() {
 	c.Serve.PublicURL = strings.TrimRight(c.Serve.PublicURL, "/")
 	for i := range c.Repos {
 		r := &c.Repos[i]
+		if r.Format == FormatMunki && r.Catalog == "" {
+			r.Catalog = DefaultCatalog
+		}
 		if r.Format == FormatDeb {
 			if r.Suite == "" {
 				r.Suite = "stable"
@@ -304,7 +324,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("repos[%d]: invalid name %q", i, r.Name)
 		}
 		switch r.Format {
-		case FormatDeb, FormatArch, FormatRPM, FormatGoo:
+		case FormatDeb, FormatArch, FormatRPM, FormatGoo, FormatMunki:
 		default:
 			return fmt.Errorf("repos[%d] %s: unknown format %q", i, r.Name, r.Format)
 		}
@@ -327,6 +347,9 @@ func (c *Config) Validate() error {
 		if r.ValidFor != "" && r.Format != FormatDeb {
 			return fmt.Errorf("repos[%d] %s: valid_for only applies to deb repos", i, r.Name)
 		}
+		if err := r.validateMunki(); err != nil {
+			return fmt.Errorf("repos[%d] %s: %w", i, r.Name, err)
+		}
 		if r.Format == FormatDeb {
 			for _, f := range []string{r.Suite, r.Codename, r.Component} {
 				if !nameRE.MatchString(f) {
@@ -334,6 +357,26 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// validateMunki checks the munki-only settings.
+func (r Repo) validateMunki() error {
+	if r.Format != FormatMunki {
+		if r.Catalog != "" || r.SiteDefault || r.ManifestsSource != "" {
+			return errors.New("catalog, site_default and manifests_source only apply to munki repos")
+		}
+		return nil
+	}
+	if len(r.Architectures) > 0 {
+		return errors.New("architectures doesn't apply to munki repos (pkginfo's supported_architectures does)")
+	}
+	if !nameRE.MatchString(r.Catalog) || r.Catalog == "all" || r.Catalog == "index.html" {
+		return fmt.Errorf("invalid catalog %q", r.Catalog)
+	}
+	if r.ManifestsSource != "" && filepath.Clean(r.ManifestsSource) == filepath.Clean(r.Source) {
+		return errors.New("manifests_source must be a different directory from source")
 	}
 	return nil
 }

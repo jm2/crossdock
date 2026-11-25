@@ -136,3 +136,27 @@ func TestGnuPGHomeStaysWritable(t *testing.T) {
 		t.Errorf("gpg can't lock its home:\n%s", pub)
 	}
 }
+
+// Munki manifests are watched and created, but publish only reads them, so
+// they don't widen the publisher's writable directory.
+func TestManifestsSource(t *testing.T) {
+	c := cfg("/media/r6/crossdock/repo", "/media/r6/crossdock/incoming/munki")
+	c.Repos[0].ManifestsSource = "/media/r0/manifests"
+	files, err := Generate(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path := find(t, files, "crossdock-publish.path.d"); !strings.Contains(path, "PathChanged=/media/r0/manifests\n") {
+		t.Errorf("manifests_source not watched:\n%s", path)
+	}
+	if tmp := find(t, files, "tmpfiles.d"); !strings.Contains(tmp, "d /media/r0/manifests 2775 crossdock crossdock -") {
+		t.Errorf("manifests_source not created:\n%s", tmp)
+	}
+	pub := find(t, files, "crossdock-publish.service.d")
+	if !strings.Contains(pub, "ReadWritePaths=/media/r6/crossdock\n") || strings.Contains(pub, "copied") {
+		t.Errorf("manifests_source changed the writable path:\n%s", pub)
+	}
+	if !strings.Contains(pub, "RequiresMountsFor=/media/r6/crossdock/repo /media/r6/crossdock/incoming/munki /media/r0/manifests") {
+		t.Errorf("manifests_source mount not required:\n%s", pub)
+	}
+}

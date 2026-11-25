@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,6 +95,38 @@ func writeDeb(t *testing.T, dir, name, version, arch string) {
 	}
 }
 
+// writeDMG writes a stand-in disk image (a data fork, a resource plist and
+// the UDIF trailer crossdock checks) and its pkginfo sidecar.
+func writeDMG(t *testing.T, dir, name, version string) {
+	t.Helper()
+	res := []byte(`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>`)
+	data := []byte("disk image of " + name)
+	k := make([]byte, 512)
+	copy(k, "koly")
+	binary.BigEndian.PutUint32(k[4:], 4)
+	binary.BigEndian.PutUint32(k[8:], 512)
+	binary.BigEndian.PutUint64(k[32:], uint64(len(data)))
+	binary.BigEndian.PutUint64(k[216:], uint64(len(data)))
+	binary.BigEndian.PutUint64(k[224:], uint64(len(res)))
+	img := filepath.Join(dir, name+"-"+version+".dmg")
+	if err := os.WriteFile(img, slices.Concat(data, res, k), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkginfo := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>name</key><string>%s</string><key>version</key><string>%s</string>
+<key>description</key><string>page test %s</string>
+<key>installer_type</key><string>copy_from_dmg</string>
+<key>items_to_copy</key><array><dict><key>source_item</key><string>%s.app</string><key>destination_path</key><string>/Applications</string></dict></array>
+<key>installs</key><array><dict><key>type</key><string>application</string><key>path</key><string>/Applications/%s.app</string></dict></array>
+<key>installed_size</key><integer>100</integer>
+</dict></plist>
+`, name, version, name, name, name)
+	if err := os.WriteFile(img+".pkginfo", []byte(pkginfo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeGooPkg(t *testing.T, dir, name, version string) {
 	t.Helper()
 	spec := fmt.Sprintf(`{"Name":%q,"Version":%q,"Arch":"x86_64","Description":"page test %s\nmore"}`, name, version, name)
@@ -126,6 +160,7 @@ func TestPagesEndToEnd(t *testing.T) {
 		os.WriteFile(filepath.Join(in("rpm"), f), b, 0o644)
 	}
 	writeGooPkg(t, in("goo"), "tool", "1.2.3@4")
+	writeDMG(t, in("munki"), "Game", "1.2")
 
 	key := filepath.Join(work, "signing.asc")
 	if err := cmdKeygen([]string{"-uid", "crossdock pages <test@example.invalid>", "-out", key}); err != nil {
@@ -140,14 +175,15 @@ repos:
   - {name: games, format: arch, source: in/arch, architectures: [x86_64]}
   - {name: games, format: rpm, source: in/rpm}
   - {name: win, format: goo, source: in/goo}
+  - {name: mac, format: munki, source: in/munki}
 `), 0o644)
 	if err := cmdPublish([]string{"-q", "-c", cfgPath}); err != nil {
 		t.Fatal(err)
 	}
 	cur := publish.CurrentDir(filepath.Join(work, "out"))
 
-	suffixes := []string{".deb", ".rpm", ".goo", ".pkg.tar.gz"}
-	for _, repo := range []string{"deb/games", "arch/games", "rpm/games", "goo/win"} {
+	suffixes := []string{".deb", ".rpm", ".goo", ".pkg.tar.gz", ".dmg"}
+	for _, repo := range []string{"deb/games", "arch/games", "rpm/games", "goo/win", "munki/mac"} {
 		dir := filepath.Join(cur, filepath.FromSlash(repo))
 		pkgs, err := publish.FindFiles(dir, suffixes...)
 		if err != nil || len(pkgs) == 0 {
@@ -192,13 +228,32 @@ repos:
 	root, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	for _, want := range []string{"URIs: " + srv.URL + "/deb/games\n", "Server = " + srv.URL + "/arch/$repo/$arch\n",
-		"baseurl=" + srv.URL + "/rpm/games\n", "googet addrepo win " + srv.URL + "/goo/win\n"} {
+		"baseurl=" + srv.URL + "/rpm/games\n", "googet addrepo win " + srv.URL + "/goo/win\n",
+		"SoftwareRepoURL " + srv.URL + "/munki/mac\n"} {
 		if !bytes.Contains(root, []byte(want)) {
 			t.Errorf("served landing page lacks %q", want)
 		}
 	}
 	if bytes.Contains(root, []byte(pages.BaseURLPlaceholder)) {
 		t.Error("served landing page still has the placeholder")
+	}
+	// The Munki repo is what a client reads: its catalog lists the image
+	// with the digest the page shows.
+	resp, err = http.Get(srv.URL + "/munki/mac/catalogs/all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "application/xml" || resp.Header.Get("Cache-Control") != "no-cache" {
+		t.Errorf("catalogs/all served as %q, %q", ct, resp.Header.Get("Cache-Control"))
+	}
+	img, _ := os.ReadFile(filepath.Join(cur, "munki", "mac", "pkgs", "Game", "Game-1.2.dmg"))
+	sum := sha256.Sum256(img)
+	for _, want := range []string{"<string>Game/Game-1.2.dmg</string>", "<string>" + hex.EncodeToString(sum[:]) + "</string>"} {
+		if !bytes.Contains(cat, []byte(want)) {
+			t.Errorf("catalogs/all lacks %s:\n%s", want, cat)
+		}
 	}
 }
 
