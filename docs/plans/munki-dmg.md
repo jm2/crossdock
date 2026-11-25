@@ -3,7 +3,8 @@
 Nov 25, 2026. Written against `jm2/crossdock` at `f48cf70` and
 `jm2/game-packages` at `8504a75`.
 
-> **Status.** Phase 1 (browseable repos) is implemented; see
+> **Status.** Phase 1 (browseable repos) is implemented as its own PR,
+> and is released together with Phase 2 rather than on its own; see
 > [Phase 1 as built](#phase-1-as-built) for where it differs from the plan
 > below. Phase 0 needs a Mac and real game data. The decisions under
 > [Decisions](#decisions) are still open, except the landing-page URLs.
@@ -130,7 +131,8 @@ bottleneck.
 
 ## Phase 1: browseable repos by default
 
-Ship this first, as its own release: directory listings on by default, plus
+Ship this first, as its own PR (released with Phase 2, not on its own; decided
+2026-11-25): directory listings on by default, plus
 static index pages and signed checksums per repo. It makes manual download
 work for every format today, and DMGs inherit it in Phase 2.
 
