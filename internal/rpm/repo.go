@@ -79,6 +79,9 @@ func Publish(repo config.Repo, env *publish.Env) error {
 		if err := env.Release.AddVerified(f, path.Join(root, e.href), d); err != nil {
 			return err
 		}
+		env.Record(publish.PackageFile{Repo: root, Path: path.Join(root, e.href),
+			Name: pkg.Name, Version: pkg.EVR(), Arch: pkg.Arch, Summary: pkg.Summary,
+			Size: d.Size, SHA256: d.SHA256})
 		e.digest = d
 		byNEVRA[pkg.NEVRA()] = e
 		byFile[name] = e

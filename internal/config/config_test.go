@@ -90,6 +90,12 @@ func TestLoadErrors(t *testing.T) {
 		"bad valid_for": `{"output":"o","repos":[{"name":"a","format":"deb","source":"s","valid_for":"soon"}]}`,
 		"short valid":   `{"output":"o","repos":[{"name":"a","format":"deb","source":"s","valid_for":"5m"}]}`,
 		"valid on rpm":  `{"output":"o","repos":[{"name":"a","format":"rpm","source":"s","valid_for":"7d"}]}`,
+		"ftp url":       `{"output":"o","serve":{"public_url":"ftp://nas"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"relative url":  `{"output":"o","serve":{"public_url":"nas.lan/repo"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"url query":     `{"output":"o","serve":{"public_url":"https://nas/?a=b"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"url fragment":  `{"output":"o","serve":{"public_url":"https://nas/#x"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"url userinfo":  `{"output":"o","serve":{"public_url":"https://u:p@nas"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"index string":  `{"output":"o","serve":{"index":"yes please"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
 	} {
 		p := filepath.Join(t.TempDir(), "c.json")
 		os.WriteFile(p, []byte(body), 0o644)
@@ -129,6 +135,43 @@ func TestEnvExpansionAndServeDefaults(t *testing.T) {
 	}
 	if c.Serve.Listen != ":8080" {
 		t.Errorf("serve.listen default = %q", c.Serve.Listen)
+	}
+	if !c.Serve.IndexEnabled() || c.Serve.Index == nil || !*c.Serve.Index || c.Serve.PublicURL != "" {
+		t.Errorf("serve.index should default to on: %+v", c.Serve)
+	}
+}
+
+func TestServeIndexAndPublicURL(t *testing.T) {
+	load := func(serve string) Serve {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "c.yaml")
+		os.WriteFile(p, []byte("output: out\nserve:\n"+serve+"repos: [{name: a, format: rpm, source: in}]\n"), 0o644)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.Serve
+	}
+	if s := load("  index: false\n"); s.IndexEnabled() {
+		t.Error("index: false must turn listings off")
+	}
+	if s := load("  index: true\n"); !s.IndexEnabled() {
+		t.Error("index: true must keep listings on")
+	}
+	// A trailing slash is dropped, since the pages append "/<format>/<repo>".
+	for in, want := range map[string]string{
+		"https://repo.example/":         "https://repo.example",
+		"http://nas.lan:8080":           "http://nas.lan:8080",
+		"https://nas.lan/crossdock///":  "https://nas.lan/crossdock",
+		"http://[fd00::5]:8080/mirror/": "http://[fd00::5]:8080/mirror",
+	} {
+		if got := load("  public_url: \"" + in + "\"\n").PublicURL; got != want {
+			t.Errorf("public_url %q = %q, want %q", in, got, want)
+		}
+	}
+	// The zero value (a config built in code, or `serve -root`) means on.
+	if !(Serve{}).IndexEnabled() {
+		t.Error("an unset index must mean on")
 	}
 }
 

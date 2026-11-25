@@ -24,7 +24,26 @@ type Env struct {
 	// Now is the publish timestamp (honours SOURCE_DATE_EPOCH).
 	Now  time.Time
 	Logf func(format string, args ...any)
+	// Packages collects every package file the backends put in Release,
+	// in the order they reported them (see Record). The browseable pages
+	// and SHA256SUMS are built from it once every repo is published.
+	Packages []PackageFile
 }
+
+// PackageFile describes one package file in a release.
+type PackageFile struct {
+	// Repo is the repo's directory in the release, "<format>/<name>".
+	Repo string
+	// Path is the file's slash-separated path in the release, under Repo.
+	Path                         string
+	Name, Version, Arch, Summary string
+	Size                         int64
+	SHA256                       string
+}
+
+// Record notes a package file a backend just added to the release. Call
+// it once per path, next to AddFile or AddVerified.
+func (e *Env) Record(f PackageFile) { e.Packages = append(e.Packages, f) }
 
 // FindFiles returns files under dir (recursively) whose names end with any
 // of the given suffixes, sorted. A matching symlink is an error.

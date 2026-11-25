@@ -6,6 +6,11 @@ signing:
   key_file: /etc/crossdock/signing.asc   # from `crossdock keygen`
   passphrase_env: CROSSDOCK_PASSPHRASE   # only for a protected key
 
+serve:
+  listen: ":8080"
+  # index: false                         # no listings or landing page
+  public_url: https://repo.example       # for the pages' setup snippets
+
 repos:
   - name: jm2
     format: arch

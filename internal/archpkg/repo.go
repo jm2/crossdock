@@ -121,6 +121,9 @@ func Publish(repo config.Repo, env *publish.Env) error {
 			if err := env.Release.AddVerified(e.pkg.Path, path.Join(dir, e.file), e.digest); err != nil {
 				return err
 			}
+			env.Record(publish.PackageFile{Repo: path.Join("arch", repo.Name), Path: path.Join(dir, e.file),
+				Name: e.pkg.Name(), Version: e.pkg.Version(), Arch: e.pkg.Arch(), Summary: e.pkg.one("pkgdesc"),
+				Size: e.digest.Size, SHA256: e.digest.SHA256})
 			if e.sig != nil {
 				if _, err := env.Release.WriteFile(path.Join(dir, e.file+".sig"), e.sig); err != nil {
 					return err

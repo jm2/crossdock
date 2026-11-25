@@ -7,7 +7,8 @@
 #   1. makes a key with `crossdock keygen` and publishes the RPM test data
 #   2. has dnf verify repomd.xml.asc (repo_gpgcheck=1), list and query the
 #      packages, and download one
-#   3. checks that a repomd.xml that no longer matches its signature fails
+#   3. checks the repo page, and the download against the signed SHA256SUMS
+#   4. checks that a repomd.xml that no longer matches its signature fails
 #
 #   CROSSDOCK=./crossdock build-aux/ci/dnf-smoke.sh internal/rpm/testdata
 #
@@ -62,6 +63,24 @@ dnf "${dnf_repo[@]}" repoquery --qf '%{name}-%{evr}.%{arch}\n' | grep . | sort |
 dnf "${dnf_repo[@]}" repoquery --provides Archer | grep -qx 'barb >= 11.22.33-44' || fail "Archer provides"
 dnf "${dnf_repo[@]}" repoquery --requires Archer | grep -qx 'fooa <= 2' || fail "Archer requires"
 (cd "$work" && dnf "${dnf_repo[@]}" download Rimmer && ls Rimmer-*.rpm) || fail "download"
+
+echo "== repo page and SHA256SUMS, as a person downloading by hand"
+# No public_url is set, so serve fills in the address the page came from.
+curl -fsS -o "$work/page.html" http://127.0.0.1:8080/rpm/t/ || fail "no repo page"
+grep -qF 'baseurl=http://127.0.0.1:8080/rpm/t' "$work/page.html" || fail "repo page lacks the dnf snippet"
+mkdir "$work/dl"
+for f in crossdock.gpg rpm/t/SHA256SUMS rpm/t/SHA256SUMS.asc; do
+  curl -fsS -o "$work/dl/${f##*/}" "http://127.0.0.1:8080/$f" || fail "not served: /$f"
+done
+if command -v gpgv >/dev/null; then
+  gpgv --keyring "$work/dl/crossdock.gpg" "$work/dl/SHA256SUMS.asc" "$work/dl/SHA256SUMS" || fail "SHA256SUMS.asc doesn't verify"
+else
+  # The EL10 image has no GnuPG tools (dnf checks repomd.xml.asc itself).
+  # Fedora's gpgv, Ubuntu's gpgv and Debian's sqv check SHA256SUMS.asc.
+  echo "gpgv not installed; SHA256SUMS.asc not checked here"
+fi
+cp "$work"/Rimmer-*.rpm "$work/dl/"
+(cd "$work/dl" && sha256sum -c --ignore-missing SHA256SUMS) || fail "the download doesn't match SHA256SUMS"
 
 echo "== tampered repomd.xml"
 cur=$(readlink -f "$work/out/current")

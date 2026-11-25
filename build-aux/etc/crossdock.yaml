@@ -10,6 +10,14 @@ signing:
 
 serve:
   listen: ":8080"
+  # Browseable repos: directory listings, plus a page at / with a setup
+  # snippet for every repo. Set it to false on a host the internet can
+  # reach, so the repo names aren't listed. Each repo's own page and
+  # SHA256SUMS are published either way.
+  index: true
+  # The address clients reach this server at, for those snippets. Unset,
+  # they show the address each page was opened at.
+  # public_url: http://nas.lan:8080
 
 # Drop packages into /var/lib/crossdock/incoming/<format>/ to publish them.
 repos:

@@ -51,8 +51,10 @@ and rpm-sequoia would accept them.
     deb/<repo>/dists/<suite>/<component>/binary-<arch>/Packages{,.gz}
     deb/<repo>/pool/<component>/<p>/<source>/<file>.deb
     arch/<repo>/<arch>/{<repo>.db,<repo>.files}[.tar.gz][.sig] + packages
-    rpm/<repo>/<arch>/{repodata/,*.rpm}        # milestone 3
-    goo/<repo>/{index,packages/*.goo}          # milestone 4
+    rpm/<repo>/{repodata/,Packages/<l>/*.rpm}
+    goo/<repo>/{index,packages/*.goo}
+    index.html                                 # landing page: setup snippets
+    <format>/<repo>/{index.html,SHA256SUMS,SHA256SUMS.asc}   # browse, check downloads
   store/<sha256>                               # content store, hardlinked into releases
 ```
 
@@ -191,6 +193,10 @@ func Publish(repo config.Repo, env *publish.Env) error
 5. **M5: packaging glue (optional).** Build packages from one nFPM spec
    (deb/rpm/arch), plus a `.goo` writer, so `-bin` style packages come from one
    definition.
+6. **M6: browseable repos and Munki** (in progress). Phase 1, done:
+   listings on by default, a landing page and per-repo pages, and signed
+   `SHA256SUMS`. Next: a `format: munki` backend for macOS DMGs. See
+   [docs/plans/munki-dmg.md](docs/plans/munki-dmg.md).
 
 ## Open questions
 

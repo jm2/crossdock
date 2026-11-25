@@ -84,6 +84,22 @@ for f in deb/local/dists/stable/InRelease arch/local/x86_64/local.db arch/local/
   curl -fsS --noproxy '*' -o /dev/null "http://127.0.0.1:8080/$f" || fail "not served: /$f"
 done
 
+echo "== browseable: landing page, repo pages and signed SHA256SUMS"
+# The packaged config sets no public_url, so serve fills in the address
+# each page was requested at.
+curl -fsS --noproxy '*' http://127.0.0.1:8080/ > "$work/landing.html" || fail "no landing page"
+for want in 'URIs: http://127.0.0.1:8080/deb/local' 'baseurl=http://127.0.0.1:8080/rpm/local' \
+  'Server = http://127.0.0.1:8080/arch/$repo/$arch' 'googet addrepo local http://127.0.0.1:8080/goo/local'; do
+  grep -qF "$want" "$work/landing.html" || fail "landing page lacks: $want"
+done
+curl -fsS --noproxy '*' -o "$work/deb-page.html" http://127.0.0.1:8080/deb/local/ || fail "no deb repo page"
+grep -qF 'crossdock-smoke_1.0_all.deb' "$work/deb-page.html" || fail "deb repo page lacks the package"
+for f in crossdock.gpg deb/local/SHA256SUMS deb/local/SHA256SUMS.asc; do
+  curl -fsS --noproxy '*' -o "$work/${f##*/}" "http://127.0.0.1:8080/$f" || fail "not served: /$f"
+done
+gpgv --keyring "$work/crossdock.gpg" "$work/SHA256SUMS.asc" "$work/SHA256SUMS" || fail "SHA256SUMS.asc doesn't verify"
+grep -q ' crossdock-smoke_1.0_all\.deb$' "$work/SHA256SUMS" || fail "SHA256SUMS lacks the package"
+
 echo "== install with apt over HTTP"
 install -d /etc/apt/keyrings
 curl -fsS --noproxy '*' -o /etc/apt/keyrings/crossdock.asc http://127.0.0.1:8080/crossdock.asc

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -55,13 +56,27 @@ type Config struct {
 // so the repo is reachable on the LAN without root or a reverse proxy.
 const DefaultListen = ":8080"
 
-// Serve configures the built-in HTTP server.
+// Serve configures the built-in HTTP server, and the pages publish writes
+// for people browsing the repos.
 type Serve struct {
 	// Listen is the TCP address to listen on (default ":8080").
 	Listen string `yaml:"listen,omitempty"`
-	// Index enables HTML directory listings.
-	Index bool `yaml:"index,omitempty"`
+	// Index makes the repos browseable: HTML directory listings, plus the
+	// landing page publish writes at the release root, which names every
+	// repo. On when unset; see IndexEnabled. The per-repo pages and
+	// SHA256SUMS are always published, since they list nothing the repo's
+	// own index doesn't.
+	Index *bool `yaml:"index,omitempty"`
+	// PublicURL is the address clients reach the release root at, such as
+	// "https://repo.example" or "https://nas.lan/crossdock". The pages'
+	// client snippets use it. Unset, serve and the generated nginx config
+	// fill in each request's own address instead.
+	PublicURL string `yaml:"public_url,omitempty"`
 }
+
+// IndexEnabled reports whether directory listings and the landing page
+// are on (the default).
+func (s Serve) IndexEnabled() bool { return s.Index == nil || *s.Index }
 
 // Signing configures repository and package signatures.
 type Signing struct {
@@ -204,6 +219,11 @@ func (c *Config) applyDefaults() {
 	if c.Serve.Listen == "" {
 		c.Serve.Listen = DefaultListen
 	}
+	if c.Serve.Index == nil {
+		on := true
+		c.Serve.Index = &on
+	}
+	c.Serve.PublicURL = strings.TrimRight(c.Serve.PublicURL, "/")
 	for i := range c.Repos {
 		r := &c.Repos[i]
 		if r.Format == FormatDeb {
@@ -226,6 +246,29 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// validPublicURL accepts "" or an absolute http(s) URL with no query,
+// fragment or credentials: the pages append repo paths to it.
+func validPublicURL(s string) error {
+	if s == "" {
+		return nil
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return err
+	}
+	switch {
+	case u.Scheme != "http" && u.Scheme != "https":
+		return errors.New("must start with http:// or https://")
+	case u.Host == "":
+		return errors.New("has no host")
+	case u.User != nil:
+		return errors.New("must not contain credentials")
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(s, "#"):
+		return errors.New("must not have a query or fragment")
+	}
+	return nil
+}
+
 // Validate checks the config for errors.
 func (c *Config) Validate() error {
 	if c.Output == "" {
@@ -241,6 +284,9 @@ func (c *Config) Validate() error {
 		if s.PassphraseEnv != "" && s.PassphraseFile != "" {
 			return fmt.Errorf("signing: set at most one of passphrase_env or passphrase_file")
 		}
+	}
+	if err := validPublicURL(c.Serve.PublicURL); err != nil {
+		return fmt.Errorf("serve: public_url %q: %w", c.Serve.PublicURL, err)
 	}
 	if len(c.Repos) == 0 {
 		return fmt.Errorf("no repos configured")

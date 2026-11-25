@@ -26,6 +26,7 @@ import (
 	"github.com/jm2/crossdock/internal/config"
 	"github.com/jm2/crossdock/internal/deb"
 	"github.com/jm2/crossdock/internal/goo"
+	"github.com/jm2/crossdock/internal/pages"
 	"github.com/jm2/crossdock/internal/publish"
 	"github.com/jm2/crossdock/internal/rpm"
 	"github.com/jm2/crossdock/internal/serve"
@@ -178,7 +179,8 @@ func publishRelease(cfg *config.Config, env *publish.Env, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	env.Now, env.Release = now, rel
+	// Packages describes this round's release only.
+	env.Now, env.Release, env.Packages = now, rel, nil
 	rel.Logf = log.Printf // warnings still show with -q
 	if cfg.NoSymlinks {
 		rel.NoSymlinks()
@@ -318,7 +320,8 @@ func build(cfg *config.Config, env *publish.Env) error {
 			return fmt.Errorf("%s/%s: %w", r.Format, r.Name, err)
 		}
 	}
-	return nil
+	// Last, so they describe every repo as published.
+	return pages.Write(cfg, env, "crossdock "+version)
 }
 
 // publishTime honours SOURCE_DATE_EPOCH for reproducible output.
@@ -419,12 +422,23 @@ func serveSettings(root, cfgPath string) (string, config.Serve, error) {
 	return cfg.Output, cfg.Serve, nil
 }
 
+// indexSetting decides whether directory listings are on: an explicit
+// -index flag wins, then the config's serve.index, which is on by default.
+func indexSetting(fs *flag.FlagSet, flagValue bool, sc config.Serve) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) { set = set || f.Name == "index" })
+	if set {
+		return flagValue
+	}
+	return sc.IndexEnabled()
+}
+
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("c", "crossdock.yaml", "config file (for its output directory)")
 	root := fs.String("root", "", "output directory to serve (overrides -c)")
 	listen := fs.String("listen", "", "listen address (default: config serve.listen, else "+config.DefaultListen+")")
-	index := fs.Bool("index", false, "enable HTML directory listings (also config serve.index)")
+	index := fs.Bool("index", true, "HTML directory listings; -index=false turns them off (default: config serve.index, else on)")
 	quiet := fs.Bool("q", false, "disable the access log")
 	fs.Parse(args)
 
@@ -435,13 +449,10 @@ func cmdServe(args []string) error {
 	if *listen != "" {
 		sc.Listen = *listen
 	}
-	if *index {
-		sc.Index = true
-	}
 	if _, err := os.Stat(out); err != nil {
 		return fmt.Errorf("output directory: %w", err)
 	}
-	var h http.Handler = &serve.Handler{Output: out, Index: sc.Index}
+	var h http.Handler = &serve.Handler{Output: out, Index: indexSetting(fs, *index, sc)}
 	if !*quiet {
 		h = serve.AccessLog(h, log.New(os.Stdout, "", log.LstdFlags|log.LUTC))
 	}
@@ -458,14 +469,15 @@ func cmdNginx(args []string) error {
 	root := fs.String("root", "", "output directory (overrides -c)")
 	listen := fs.String("listen", "80", "nginx listen directive value")
 	name := fs.String("server-name", "_", "nginx server_name")
-	index := fs.Bool("index", false, "enable autoindex")
+	index := fs.Bool("index", true, "autoindex; -index=false turns it off (default: config serve.index, else on)")
 	fs.Parse(args)
 
-	out, _, err := serveSettings(*root, *cfgPath)
+	out, sc, err := serveSettings(*root, *cfgPath)
 	if err != nil {
 		return err
 	}
-	return serve.WriteNginx(os.Stdout, serve.NginxOptions{Output: out, Listen: *listen, ServerName: *name, Index: *index})
+	return serve.WriteNginx(os.Stdout, serve.NginxOptions{Output: out, Listen: *listen, ServerName: *name,
+		Index: indexSetting(fs, *index, sc)})
 }
 
 func cmdSystemd(args []string) error {

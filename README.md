@@ -59,7 +59,10 @@ rsync -av --no-g --chmod=F664 *.goo nas:/var/lib/crossdock/incoming/goo/
 
 Clients then use `http://nas:8080/deb/local`,
 `http://nas:8080/arch/$repo/$arch`, `http://nas:8080/rpm/local` and
-`http://nas:8080/goo/local` (see [Clients](#clients)).
+`http://nas:8080/goo/local` (see [Clients](#clients)). Open
+`http://nas:8080/` in a browser for a ready-to-paste setup snippet for each
+repo, and for pages to download packages by hand (see
+[Browsing and downloading by hand](#browsing-and-downloading-by-hand)).
 
 **LAN only by default.** `crossdock-serve` listens on every interface on
 port 8080, but systemd's IP filtering only accepts loopback, link-local,
@@ -177,6 +180,8 @@ Config options worth knowing:
 | `allow_empty: true` (any repo) | Lets a repo that has packages be published empty. See [Large repos](#large-repos). |
 | `sign_packages: true` (arch repos) | Creates a `.sig` for each package without one. Off by default: with a signing key and clients requiring database signatures (`DatabaseRequired`), the database pins every package's SHA-256. It holds each package in memory and re-signs them all on every publish, so don't use it with multi-GiB packages. |
 | `gnupg_home` + `key_id` (signing) | Signs through `gpg` with an existing keyring instead of `key_file`, for gpg-agent and smartcard keys. This is the only feature that needs `gpg` installed. |
+| `serve.index: false` | Turns off directory listings and the landing page at `/`, which names every repo. On by default. Turn it off on a host the internet can reach. Each repo's own page and `SHA256SUMS` stay, since they list nothing the repo's index doesn't. `-index=false` on `serve` or `nginx-config` does the same for listings. |
+| `serve.public_url` | The address clients reach the release root at, e.g. `https://repo.example`, for the pages' setup snippets. Set it behind a proxy that serves crossdock under a path, or when the pages are served by something other than `serve` or the generated nginx config. |
 
 apt repos always set `Acquire-By-Hash: yes` and keep the previous
 generation's indexes under `by-hash/`, so a client that read the old
@@ -197,7 +202,7 @@ they behave identically:
 
 | Paths | Cache-Control |
 |---|---|
-| `InRelease`, `Release*`, `Packages*`, `repomd.xml*`, `*.db`/`*.files` (+`.sig`), GooGet `index`, `/crossdock.{asc,gpg}` | `no-cache` (revalidate via ETag/Last-Modified) |
+| `InRelease`, `Release*`, `Packages*`, `repomd.xml*`, `*.db`/`*.files` (+`.sig`), GooGet `index`, `/crossdock.{asc,gpg}`, `index.html`, `SHA256SUMS{,.asc}`, directory listings | `no-cache` (revalidate via ETag/Last-Modified) |
 | `.deb`, `.rpm`, `.goo`, `.pkg.tar.*` (+`.sig`) | `public, max-age=86400` |
 | `…/by-hash/…` | `public, max-age=31536000, immutable` |
 | everything else | `public, max-age=300` |
@@ -208,9 +213,10 @@ they behave identically:
   `X-Crossdock-Release`.
 - confines file access to the release with `os.Root`, so symlinks can't
   escape it, and refuses dotfiles and non-GET/HEAD methods.
-- supports range and conditional requests, an optional `-index` listing,
-  an access log (`-q` turns it off), and graceful shutdown on
-  SIGINT/SIGTERM.
+- serves a directory's `index.html`, or else lists it (directories first,
+  with sizes and UTC times). No JavaScript; dotfiles are never listed.
+- supports range and conditional requests, an access log (`-q` turns it
+  off), and graceful shutdown on SIGINT/SIGTERM.
 - exposes `/_crossdock/healthz` and `/_crossdock/release` (JSON).
 
 On a LAN, `serve` alone is enough (see
@@ -218,9 +224,43 @@ On a LAN, `serve` alone is enough (see
 nginx or Caddy and either serve the directory there with the generated
 config, or reverse-proxy to `serve`.
 
+The generated nginx config needs `ngx_http_sub_module` (for `sub_filter`;
+see below), which the Debian, Fedora, EL, Arch and nginx.org packages all
+include.
+
+### Browsing and downloading by hand
+
+Every publish also writes, as plain files in the release:
+
+- `index.html` at the root: the signing key's fingerprint, and a setup
+  snippet for every repo (apt, pacman, dnf, GooGet). Left out with
+  `serve.index: false`.
+- `<format>/<repo>/index.html`: each package's version, architecture,
+  size and SHA-256, with a download link. A deb split into `<name>-dataN`
+  parts (each `.deb` holds at most about 9.3 GiB) is listed under its
+  package with the one `apt install` line that needs them all.
+- `<format>/<repo>/SHA256SUMS`, in `sha256sum` format, and
+  `SHA256SUMS.asc`, a detached signature by the repo key. A file
+  downloaded by hand checks with:
+
+```sh
+curl -fsSLO https://repo.example/crossdock.gpg -O https://repo.example/deb/jm2/SHA256SUMS -O https://repo.example/deb/jm2/SHA256SUMS.asc
+gpgv --keyring ./crossdock.gpg SHA256SUMS.asc SHA256SUMS   # or: sqv --keyring crossdock.gpg SHA256SUMS.asc SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+The snippets need the address clients use. With `serve.public_url` set,
+it's written into the pages. Without it, the pages carry a
+`http://<host>:8080` placeholder, which `serve` and the generated nginx
+config replace with the address each request came to (its `Host` header,
+if that's a plain host name). Behind a proxy that terminates TLS, `serve`
+takes the scheme from `X-Forwarded-Proto`. Other servers and object
+stores show the placeholder, so set `public_url` for those.
+
 ## Clients
 
-crossdock targets current releases only: Debian stable (13) and newer,
+The landing page at `/` has each of these snippets filled in for your
+repos. crossdock targets current releases only: Debian stable (13) and newer,
 Fedora 44 and 45, EL10.2 and newer, and Arch. CI runs each one's real
 client against a signed crossdock repo: apt on Debian stable (Sequoia's
 `sqv`) and Ubuntu 24.04 (`gpgv`), dnf5 on Fedora 44 and 45, dnf4 on
@@ -294,6 +334,7 @@ For pacman, add it with `pacman-key --add` and `--lsign-key`.
 | pacman | `arch/<repo>/<arch>/<repo>.{db,files}` + packages |
 | RPM | `rpm/<repo>/repodata/`, `rpm/<repo>/Packages/<l>/…` |
 | GooGet | `goo/<repo>/index{,.gz}`, `goo/<repo>/packages/<name>.<arch>.<ver>.goo` |
+| every repo | `<format>/<repo>/index.html`, `<format>/<repo>/SHA256SUMS{,.asc}` |
 
 A pacman database holds one version of each package. When an `arch` source has several
 versions of one name and architecture, crossdock publishes the newest (compared as pacman's

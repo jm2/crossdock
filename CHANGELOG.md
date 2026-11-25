@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Browseable repos.** Every publish writes a landing page (`index.html` at the release root)
+  with the signing key's fingerprint and a ready-to-paste setup snippet for each repo (apt,
+  pacman, dnf, GooGet), and an `index.html` per repo listing each package's version,
+  architecture, size and SHA-256 with a download link. A deb split into `<name>-dataN` parts is
+  listed under its package with the one `apt install` line that needs them all.
+- Each repo gets `SHA256SUMS`, in `sha256sum -c` format, and `SHA256SUMS.asc`, a detached
+  signature by the repo key, so packages downloaded by hand can be checked with `gpgv` or `sqv`.
+- `serve.public_url` sets the address the snippets use. Without it, `serve` and the generated
+  nginx config fill in the address each page was requested at.
+- `serve`'s directory listings show directories first, sizes and UTC times. A directory's
+  `index.html` is served in place of the listing.
+
+### Changed
+
+- Directory listings are on by default in `serve` and `nginx-config`, and the landing page is
+  published by default. Existing configs have no `index` key, so this applies to them on
+  upgrade. On a host the internet can reach, set `serve.index: false`: that turns listings off
+  and leaves out the landing page, the only page that names every repo. Each repo's indexes
+  already list its packages to anyone who can reach them, and so do its page and `SHA256SUMS`.
+  `-index=false` turns listings off for one `serve` or `nginx-config` run.
+- `nginx-config` needs `ngx_http_sub_module` (`sub_filter`), which the Debian, Fedora, EL,
+  Arch and nginx.org packages include, and serves `index.html` for directories.
+
 ## [0.2.3] — 2026-11-12
 
 ### Added

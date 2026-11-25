@@ -6,6 +6,7 @@ package serve
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jm2/crossdock/internal/pages"
 	"github.com/jm2/crossdock/internal/publish"
 )
 
@@ -37,9 +39,14 @@ func TestMatch(t *testing.T) {
 		"/rpm/jm2/repodata/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-primary.xml.gz": "by-hash",
 		"/rpm/jm2/Packages/a/Archer-3.4.5-6.x86_64.rpm":                                                     "package",
 		"/rpm/jm2/Packages/a/repodata-tool-1-1.noarch.rpm":                                                  "package",
-		"/crossdock.asc":         "metadata",
-		"/deb/jm2/crossdock.asc": "default",
-		"/README.txt":            "default",
+		"/crossdock.asc":           "metadata",
+		"/index.html":              "metadata",
+		"/deb/jm2/index.html":      "metadata",
+		"/rpm/jm2/SHA256SUMS":      "metadata",
+		"/arch/jm2/SHA256SUMS.asc": "metadata",
+		"/goo/jm2/notindex.html":   "default",
+		"/deb/jm2/crossdock.asc":   "default",
+		"/README.txt":              "default",
 	} {
 		if got := Match(p).Name; got != want {
 			t.Errorf("Match(%q) = %s, want %s", p, got, want)
@@ -55,6 +62,9 @@ func TestContentType(t *testing.T) {
 		"/x/jm2.db":            "application/gzip",
 		"/x/a.pkg.tar.zst.sig": "application/pgp-signature",
 		"/x/unknown.bin":       "application/octet-stream",
+		"/x/SHA256SUMS":        "text/plain; charset=utf-8",
+		"/x/SHA256SUMS.asc":    "text/plain; charset=utf-8",
+		"/x/index.html":        "text/html; charset=utf-8",
 	} {
 		if got := ContentType(p, Match(p)); got != want {
 			t.Errorf("ContentType(%q) = %q, want %q", p, got, want)
@@ -94,6 +104,10 @@ func do(t *testing.T, h http.Handler, method, path string, hdr map[string]string
 	t.Helper()
 	req := httptest.NewRequest(method, path, nil)
 	for k, v := range hdr {
+		if k == "Host" {
+			req.Host = v // net/http reads Host from here, not the header map
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
@@ -159,13 +173,143 @@ func TestIndex(t *testing.T) {
 	}
 	r := do(t, h, "GET", "/arch/jm2/x86_64/", nil)
 	body, _ := io.ReadAll(r.Body)
-	if r.StatusCode != 200 || !bytes.Contains(body, []byte("jm2.db.tar.gz")) {
+	// The db symlink shows its target's size; the escaping symlink isn't listed.
+	if r.StatusCode != 200 || !bytes.Contains(body, []byte(`<a href="./jm2.db.tar.gz">jm2.db.tar.gz</a></td><td class="num" title="2 bytes">2 B</td>`)) ||
+		!bytes.Contains(body, []byte(`<a href="./jm2.db">jm2.db</a>`)) || !bytes.Contains(body, []byte(`<a href="../">../</a>`)) {
 		t.Errorf("listing: %d %s", r.StatusCode, body)
+	}
+	if cc := r.Header.Get("Cache-Control"); cc != "no-cache" {
+		t.Errorf("listing Cache-Control = %q", cc)
 	}
 	r = do(t, h, "GET", "/", nil)
 	body, _ = io.ReadAll(r.Body)
-	if bytes.Contains(body, []byte(".secret")) {
-		t.Error("listing shows hidden files")
+	for _, bad := range []string{".secret", "escape", `href="../"`, "<script"} {
+		if bytes.Contains(body, []byte(bad)) {
+			t.Errorf("root listing contains %q:\n%s", bad, body)
+		}
+	}
+	// Directories come first, then files, each sorted by name.
+	arch, deb := bytes.Index(body, []byte(`href="./arch/"`)), bytes.Index(body, []byte(`href="./deb/"`))
+	if arch < 0 || deb < 0 || arch > deb {
+		t.Errorf("directories out of order:\n%s", body)
+	}
+	for _, p := range []string{"/.secret", "/.crossdock/", "/escape", "/arch/jm2/../.secret"} {
+		if r := do(t, h, "GET", p, nil); r.StatusCode != 404 {
+			t.Errorf("GET %s with listings on: %d, want 404", p, r.StatusCode)
+		}
+	}
+}
+
+// pageFixture publishes a release with pages: one carrying the base URL
+// placeholder, as publish writes it without serve.public_url, and one
+// with the address written in.
+func pageFixture(t *testing.T) string {
+	t.Helper()
+	out := t.TempDir()
+	rel, err := publish.Begin(out, time.Unix(1000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel.WriteFile("index.html", []byte("<pre>URIs: "+pages.BaseURLPlaceholder+"/deb/jm2\ngpgkey="+pages.BaseURLPlaceholder+"/crossdock.asc</pre>"))
+	rel.WriteFile("deb/jm2/index.html", []byte("<pre>URIs: https://repo.example/deb/jm2</pre>"))
+	rel.WriteFile("deb/jm2/SHA256SUMS", []byte("abc  x.deb\n"))
+	rel.WriteFile("rpm/jm2/repodata/repomd.xml", []byte("<repomd/>"))
+	if err := rel.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestPages(t *testing.T) {
+	out := pageFixture(t)
+	for _, index := range []bool{true, false} {
+		h := &Handler{Output: out, Index: index}
+		// index.html wins over the listing, and is served with listings off.
+		r := do(t, h, "GET", "/", nil)
+		body, _ := io.ReadAll(r.Body)
+		if r.StatusCode != 200 || !bytes.Contains(body, []byte("URIs: http://example.com/deb/jm2\ngpgkey=http://example.com/crossdock.asc")) {
+			t.Fatalf("index=%v: root page: %d %s", index, r.StatusCode, body)
+		}
+		if ct, cc := r.Header.Get("Content-Type"), r.Header.Get("Cache-Control"); ct != "text/html; charset=utf-8" || cc != "no-cache" {
+			t.Errorf("root page headers: %q %q", ct, cc)
+		}
+		if r := do(t, h, "GET", "/deb/jm2", nil); r.StatusCode != http.StatusMovedPermanently {
+			t.Errorf("index=%v: repo dir without slash: %d", index, r.StatusCode)
+		}
+		// Without an index.html, only a listing can answer.
+		want := http.StatusNotFound
+		if index {
+			want = http.StatusOK
+		}
+		if r := do(t, h, "GET", "/rpm/jm2/", nil); r.StatusCode != want {
+			t.Errorf("index=%v: dir without index.html: %d, want %d", index, r.StatusCode, want)
+		}
+	}
+	h := &Handler{Output: out, Index: true}
+
+	// The address comes from the request; a TLS-terminating proxy sets the scheme.
+	r := do(t, h, "GET", "/index.html", map[string]string{"Host": "nas.lan:8080", "X-Forwarded-Proto": "https"})
+	body, _ := io.ReadAll(r.Body)
+	if !bytes.Contains(body, []byte("URIs: https://nas.lan:8080/deb/jm2")) || r.Header.Get("Vary") != "X-Forwarded-Proto" {
+		t.Errorf("forwarded https: %s (Vary %q)", body, r.Header.Get("Vary"))
+	}
+	r = do(t, h, "GET", "/", map[string]string{"Host": "[fd00::5]:8080"})
+	body, _ = io.ReadAll(r.Body)
+	if !bytes.Contains(body, []byte("URIs: http://[fd00::5]:8080/deb/jm2")) {
+		t.Errorf("IPv6 host: %s", body)
+	}
+	// Each address gets its own ETag, so a cache never mixes them up.
+	e1 := do(t, h, "GET", "/", map[string]string{"Host": "a.lan"}).Header.Get("ETag")
+	e2 := do(t, h, "GET", "/", map[string]string{"Host": "b.lan"}).Header.Get("ETag")
+	if e1 == "" || e1 == e2 {
+		t.Errorf("ETags %q and %q should differ", e1, e2)
+	}
+	if r := do(t, h, "GET", "/", map[string]string{"Host": "a.lan", "If-None-Match": e1}); r.StatusCode != http.StatusNotModified {
+		t.Errorf("If-None-Match on a page: %d", r.StatusCode)
+	}
+	// A Host that isn't a plain host name is never echoed: the placeholder stays.
+	for _, host := range []string{`x"><script>alert(1)</script>`, "a b", "-x.lan", "x.lan:99999999", ""} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if b := rec.Body.String(); !strings.Contains(b, pages.BaseURLPlaceholder) || strings.Contains(b, "<script") {
+			t.Errorf("Host %q: %s", host, b)
+		}
+	}
+	// A page published with public_url is served byte for byte, with the
+	// file's own ETag and range support.
+	r = do(t, h, "GET", "/deb/jm2/", map[string]string{"Range": "bytes=0-4"})
+	body, _ = io.ReadAll(r.Body)
+	if r.StatusCode != http.StatusPartialContent || string(body) != "<pre>" || r.Header.Get("Vary") != "" {
+		t.Errorf("public_url page: %d %q Vary=%q", r.StatusCode, body, r.Header.Get("Vary"))
+	}
+	r = do(t, h, "GET", "/deb/jm2/SHA256SUMS", nil)
+	if ct := r.Header.Get("Content-Type"); r.StatusCode != 200 || ct != "text/plain; charset=utf-8" {
+		t.Errorf("SHA256SUMS: %d %q", r.StatusCode, ct)
+	}
+}
+
+func TestRequestBaseURL(t *testing.T) {
+	for _, c := range []struct{ host, proto, want string }{
+		{"nas", "", "http://nas"},
+		{"nas.lan:8080", "", "http://nas.lan:8080"},
+		{"10.0.0.5:8080", "https", "https://10.0.0.5:8080"},
+		{"repo.example", "HTTPS, http", "https://repo.example"},
+		{"repo.example", "gopher", "http://repo.example"},
+		{"[::1]:8080", "", "http://[::1]:8080"},
+		{"nas_lan", "", ""},
+		{"nas/../x", "", ""},
+		{"nas.lan.", "", ""},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Host = c.host
+		if c.proto != "" {
+			r.Header.Set("X-Forwarded-Proto", c.proto)
+		}
+		if got := requestBaseURL(r); got != c.want {
+			t.Errorf("Host %q, proto %q: %q, want %q", c.host, c.proto, got, c.want)
+		}
 	}
 }
 
@@ -208,6 +352,31 @@ func TestNoRelease(t *testing.T) {
 	}
 }
 
+var update = flag.Bool("update", false, "rewrite testdata/nginx.golden")
+
+// The whole generated config is pinned, so any change to it shows up in
+// review. Regenerate with: go test ./internal/serve -run NginxGolden -update
+func TestNginxGolden(t *testing.T) {
+	var b strings.Builder
+	if err := WriteNginx(&b, NginxOptions{Output: "/var/lib/crossdock/repo", ServerName: "repo.example", Index: true}); err != nil {
+		t.Fatal(err)
+	}
+	golden := filepath.Join("testdata", "nginx.golden")
+	if *update {
+		os.MkdirAll("testdata", 0o755)
+		if err := os.WriteFile(golden, []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.String() != strings.ReplaceAll(string(want), "\r\n", "\n") {
+		t.Errorf("nginx config differs from %s (rerun with -update and review the diff):\n%s", golden, b.String())
+	}
+}
+
 func TestNginxConfig(t *testing.T) {
 	var b strings.Builder
 	if err := WriteNginx(&b, NginxOptions{Output: "/srv/cd", ServerName: "repo.example"}); err != nil {
@@ -228,5 +397,12 @@ func TestNginxConfig(t *testing.T) {
 	}
 	if strings.Count(s, "{") != strings.Count(s, "}") {
 		t.Error("unbalanced braces")
+	}
+	// Listings are opt-out, pages and the URL filling are always there.
+	for _, want := range []string{"autoindex off;", "index index.html;", "sub_filter_once off;",
+		`sub_filter "` + pages.BaseURLPlaceholder + `" $crossdock_base_url;`, `"~` + hostRE.String() + `"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("nginx config missing %q", want)
+		}
 	}
 }
