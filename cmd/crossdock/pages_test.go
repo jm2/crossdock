@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -205,6 +206,13 @@ repos:
 // CI runs gpgv on Ubuntu and sqv on Debian stable.
 func verifySums(t *testing.T, cur, dir string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// The runners' gpgv is Git for Windows' MSYS build, which reads a
+		// --keyring with no "/" (any C:\ path) as a name in its home
+		// directory. The sign tests skip external GnuPG here too.
+		t.Log("external verifiers not run on Windows")
+		return
+	}
 	sums, sig := filepath.Join(dir, pages.SumsName), filepath.Join(dir, pages.SumsName+pages.SumsSigExt)
 	verifiers := map[string][]string{
 		"gpgv": {"--keyring", filepath.Join(cur, "crossdock.gpg"), sig, sums},
