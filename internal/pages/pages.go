@@ -79,7 +79,8 @@ func Write(cfg *config.Config, env *publish.Env, generator string) error {
 	var summaries []repoPage
 	for _, r := range repos {
 		p := buildRepo(r, byRepo[string(r.Format)+"/"+r.Name], c)
-		sums := checksums(p.Dir, byRepo[p.Dir])
+		sums, byPath := checksums(p.Dir, byRepo[p.Dir])
+		p.SumsByPath = byPath
 		if _, err := env.Release.WriteFile(path.Join(p.Dir, SumsName), sums); err != nil {
 			return err
 		}
@@ -156,7 +157,10 @@ type repoPage struct {
 	Size     string
 	Groups   []group
 	SumsName string
-	Browse   []link // the repo directory's entries
+	// SumsByPath is set when SHA256SUMS names some files by their path in
+	// the repo (two different files share a name).
+	SumsByPath bool
+	Browse     []link // the repo directory's entries
 }
 
 type link struct{ Href, Text string }
@@ -242,14 +246,31 @@ func buildRepo(r config.Repo, files []publish.PackageFile, c Common) repoPage {
 
 var dataPartRE = regexp.MustCompile(`^(.+)-data([0-9]+)$`)
 
-// debParts finds split debs: <name>-dataN packages (Architecture: all)
-// that carry the bulk of <name>'s files at exactly its version, because a
-// single .deb can't hold more than about 9.3 GiB. Each part is listed under
-// every architecture of its main package, which depends on it.
+// debParts finds split debs: Architecture: all <name>-dataN packages that
+// carry the bulk of <name>'s files at exactly its version, because a single
+// .deb can't hold more than about 9.3 GiB. Each part is listed under every
+// architecture of its main package, which depends on it. A part of a part
+// (foo-data1-data1) isn't nested: only packages listed in their own right
+// take parts, so nothing ends up hidden.
 func debParts(files []publish.PackageFile) (map[int][]publish.PackageFile, map[int]bool) {
 	mains := map[string][]int{}
 	for i, f := range files {
 		mains[f.Name+"\x00"+f.Version] = append(mains[f.Name+"\x00"+f.Version], i)
+	}
+	// owners lists, for each candidate part, the packages it belongs to.
+	owners := map[int][]int{}
+	nums := map[int]int{}
+	for i, f := range files {
+		m := dataPartRE.FindStringSubmatch(f.Name)
+		// A part for one architecture can't go in every architecture's
+		// install line.
+		if m == nil || f.Arch != "all" {
+			continue
+		}
+		if own := mains[m[1]+"\x00"+f.Version]; len(own) > 0 {
+			owners[i] = own
+			nums[i], _ = strconv.Atoi(m[2])
+		}
 	}
 	type part struct {
 		n int
@@ -257,20 +278,14 @@ func debParts(files []publish.PackageFile) (map[int][]publish.PackageFile, map[i
 	}
 	byMain := map[int][]part{}
 	partOf := map[int]bool{}
-	for i, f := range files {
-		m := dataPartRE.FindStringSubmatch(f.Name)
-		if m == nil {
-			continue
+	for i, own := range owners {
+		for _, o := range own {
+			if _, isPart := owners[o]; isPart {
+				continue
+			}
+			byMain[o] = append(byMain[o], part{nums[i], files[i]})
+			partOf[i] = true
 		}
-		owners := mains[m[1]+"\x00"+f.Version]
-		if len(owners) == 0 {
-			continue
-		}
-		n, _ := strconv.Atoi(m[2])
-		for _, o := range owners {
-			byMain[o] = append(byMain[o], part{n, f})
-		}
-		partOf[i] = true
 	}
 	out := map[int][]publish.PackageFile{}
 	for o, ps := range byMain {
@@ -286,8 +301,8 @@ func debParts(files []publish.PackageFile) (map[int][]publish.PackageFile, map[i
 // in the format `sha256sum -c` reads, so a file downloaded on its own checks
 // with `sha256sum -c --ignore-missing`. Copies of one file in several
 // directories share a line. Should two different files ever share a name,
-// both are listed by their path in the repo instead.
-func checksums(dir string, files []publish.PackageFile) []byte {
+// both are listed by their path in the repo instead, and byPath is set.
+func checksums(dir string, files []publish.PackageFile) (sums []byte, byPath bool) {
 	digests := map[string]map[string]bool{}
 	for _, f := range files {
 		n := path.Base(f.Path)
@@ -301,6 +316,7 @@ func checksums(dir string, files []publish.PackageFile) []byte {
 		n := path.Base(f.Path)
 		if len(digests[n]) > 1 {
 			n = strings.TrimPrefix(f.Path, dir+"/")
+			byPath = true
 		}
 		lines[f.SHA256+"  "+n+"\n"] = true
 	}
@@ -310,7 +326,7 @@ func checksums(dir string, files []publish.PackageFile) []byte {
 	}
 	// By file name, as people scan it.
 	slices.SortFunc(sorted, func(a, b string) int { return cmp.Compare(a[66:], b[66:]) })
-	return []byte(strings.Join(sorted, ""))
+	return []byte(strings.Join(sorted, "")), byPath
 }
 
 // snippet returns the client's name, a shell snippet that sets up the repo,

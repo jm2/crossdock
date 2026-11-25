@@ -246,11 +246,18 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// publicURLRE is the characters public_url may use. The pages paste it
+// into shell commands, deb822 and ini files, where it must stay one word.
+var publicURLRE = regexp.MustCompile(`^[A-Za-z0-9._~:/\[\]%+-]+$`)
+
 // validPublicURL accepts "" or an absolute http(s) URL with no query,
 // fragment or credentials: the pages append repo paths to it.
 func validPublicURL(s string) error {
 	if s == "" {
 		return nil
+	}
+	if !publicURLRE.MatchString(s) {
+		return errors.New("may only use letters, digits and . _ ~ : / [ ] % + - (percent-encode anything else)")
 	}
 	u, err := url.Parse(s)
 	if err != nil {

@@ -199,6 +199,14 @@ func TestDebParts(t *testing.T) {
 		// A part whose package isn't there, or is at another version, stands alone.
 		pf("deb/games", "pool/main/o/orphan/orphan-data1_2_all.deb", "orphan-data1", "2", "all", 1, 'f'),
 		pf("deb/games", "pool/main/b/bo3/bo3-data1_1.26_all.deb", "bo3-data1", "1.26", "all", 1, '0'),
+		// So does one for a single architecture: it can't join arm64's install line.
+		pf("deb/games", "pool/main/q/q3/q3_1_amd64.deb", "q3", "1", "amd64", 1, '1'),
+		pf("deb/games", "pool/main/q/q3/q3_1_arm64.deb", "q3", "1", "arm64", 1, '2'),
+		pf("deb/games", "pool/main/q/q3/q3-data1_1_amd64.deb", "q3-data1", "1", "amd64", 1, '3'),
+		// A part of a part isn't nested, and isn't hidden either.
+		pf("deb/games", "pool/main/f/foo/foo_1_all.deb", "foo", "1", "all", 1, '4'),
+		pf("deb/games", "pool/main/f/foo/foo-data1_1_all.deb", "foo-data1", "1", "all", 1, '5'),
+		pf("deb/games", "pool/main/f/foo/foo-data1-data1_1_all.deb", "foo-data1-data1", "1", "all", 1, '6'),
 	)
 	p := buildRepo(debRepo, e.Packages, Common{Base: placeholderText})
 	var got []string
@@ -213,7 +221,12 @@ func TestDebParts(t *testing.T) {
 		"bo3/amd64 bo3-data1/all bo3-data2/all bo3-data10/all | sudo apt install ./bo3_1.27_amd64.deb ./bo3-data1_1.27_all.deb ./bo3-data2_1.27_all.deb ./bo3-data10_1.27_all.deb",
 		"bo3/arm64 bo3-data1/all bo3-data2/all bo3-data10/all | sudo apt install ./bo3_1.27_arm64.deb ./bo3-data1_1.27_all.deb ./bo3-data2_1.27_all.deb ./bo3-data10_1.27_all.deb",
 		"bo3-data1/all | ",
+		"foo/all foo-data1/all | sudo apt install ./foo_1_all.deb ./foo-data1_1_all.deb",
+		"foo-data1-data1/all | ",
 		"orphan-data1/all | ",
+		"q3/amd64 | ",
+		"q3/arm64 | ",
+		"q3-data1/amd64 | ",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("groups:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -229,16 +242,30 @@ func TestDebParts(t *testing.T) {
 
 func TestChecksumsNameClash(t *testing.T) {
 	// Should two different files share a name, both are listed by path.
-	got := string(checksums("arch/x", []publish.PackageFile{
+	b, byPath := checksums("arch/x", []publish.PackageFile{
 		pf("arch/x", "x86_64/a-1-1-any.pkg.tar.zst", "a", "1-1", "any", 1, '1'),
 		pf("arch/x", "aarch64/a-1-1-any.pkg.tar.zst", "a", "1-1", "any", 1, '2'),
 		pf("arch/x", "x86_64/b-1-1-x86_64.pkg.tar.zst", "b", "1-1", "x86_64", 1, '3'),
-	}))
+	})
+	got := string(b)
 	want := strings.Repeat("2", 64) + "  aarch64/a-1-1-any.pkg.tar.zst\n" +
 		strings.Repeat("3", 64) + "  b-1-1-x86_64.pkg.tar.zst\n" +
 		strings.Repeat("1", 64) + "  x86_64/a-1-1-any.pkg.tar.zst\n"
-	if got != want {
-		t.Errorf("checksums:\n%s\nwant:\n%s", got, want)
+	if got != want || !byPath {
+		t.Errorf("checksums (byPath %v):\n%s\nwant:\n%s", byPath, got, want)
+	}
+	// The page then says how to check those files.
+	e := env(t, nil,
+		pf("arch/games", "x86_64/a-1-1-any.pkg.tar.zst", "a", "1-1", "any", 1, '1'),
+		pf("arch/games", "aarch64/a-1-1-any.pkg.tar.zst", "a", "1-1", "any", 1, '2'))
+	if err := Write(cfg("", nil, archRepo), e, ""); err != nil {
+		t.Fatal(err)
+	}
+	if page := read(t, e, "arch/games/index.html"); !strings.Contains(page, "lists those by their path in the repo") {
+		t.Error("the page doesn't explain path entries in SHA256SUMS")
+	}
+	if _, byPath := checksums("arch/x", e.Packages[:1]); byPath {
+		t.Error("byPath set without a clash")
 	}
 }
 

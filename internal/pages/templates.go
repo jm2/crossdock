@@ -62,6 +62,8 @@ var repoTmpl = template.Must(template.New("repo").Funcs(funcs).Parse(head + keyB
 gpgv --keyring ./crossdock.gpg {{.SumsName}}.asc {{.SumsName}}    # or: sqv --keyring crossdock.gpg {{.SumsName}}.asc {{.SumsName}}
 {{else}}curl -fsSLO {{.Base}}/{{.Dir}}/{{.SumsName}}
 {{end}}sha256sum -c --ignore-missing {{.SumsName}}</pre>
+{{if .SumsByPath}}<p class="muted">Some different files here share a name, so {{.SumsName}} lists those by their path in the repo. Keep that path when you download one, or compare its SHA-256 with the line in {{.SumsName}} by hand.</p>
+{{end}}
 {{if .Groups}}<div class="wrap"><table>
 <thead><tr><th>Package</th><th>Version</th><th>Arch</th><th class="num">Size</th><th>File and SHA-256</th></tr></thead>
 <tbody>

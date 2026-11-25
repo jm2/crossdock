@@ -14,8 +14,9 @@ Munki 7 with `copy_from_dmg` DMGs is the right managed client for the Macs.
 The DMG is also the right hybrid artifact: the file Munki installs is the
 same one a person mounts and drags by hand. But Munki tolerates 100 GB+
 items rather than handling them well. Every update downloads the whole DMG
-again, and an upgrade briefly needs about three times the installed size
-free.
+again, and an upgrade briefly occupies about three times the installed size
+(the old copy, the DMG and the new copy), so it needs about twice the
+installed size free.
 
 **Where I agree**
 
@@ -34,8 +35,9 @@ free.
 
 **Where I disagree, or add caveats**
 
-- Size: no delta updates, about 2x the installed size free to install and
-  about 3x for a moment during an upgrade (next section). pacman, dnf, apt
+- Size: no delta updates, and about 2x the installed size free to install
+  or upgrade, with about 3x occupied for a moment during an upgrade (next
+  section). pacman, dnf, apt
   and GooGet re-download whole packages today too, so it's no regression,
   but it isn't a fix.
 - Storage: each DMG is a fifth full copy of a game on a NAS that's already
@@ -55,8 +57,10 @@ actually changes, which Phase 0 measures.
 
 ## What Munki does with a 125 GiB DMG
 
-An upgrade of a 125 GiB game peaks at about 375 GiB of free space, while
-Munki's pre-flight check asks for about 250 GiB. Everything below was read
+An upgrade of a 125 GiB game peaks at about 375 GiB occupied: the old
+install plus about 250 GiB more. Munki's pre-flight check asks for about
+250 GiB free, which covers that peak. (Corrected in review: an earlier
+draft called the 375 GiB free space.) Everything below was read
 in Munki's Swift source on `main` (CLI version 7.4.2, commit of
 2026-11-18), under `code/cli/munki/shared/`.
 
@@ -106,8 +110,9 @@ changes.
 - [ ] **Run Munki end to end on that DMG.** Hand-write the pkginfo, run
   Munki's `makecatalogs`, and serve the repo from the NAS with any static
   server. Time a fresh install and an upgrade, wired and on Wi-Fi. Kill one
-  download halfway to confirm it resumes. Watch free space during the
-  upgrade to confirm the 3x peak.
+  download halfway to confirm it resumes. Watch disk use during the
+  upgrade to confirm the peak: about 3x occupied, so free space drops by
+  about 2x.
 - [ ] **Measure what a Steam update changes.** Keep two consecutive builds
   of BO3 and one other large title in `PT_CACHE`. Chunk both trees with
   `desync make` and count shared chunks. If a typical update changes well
@@ -353,7 +358,8 @@ declarative as the others.
   then the DMG last, each as a dotfile renamed into place; remove older
   versions DMG-first.
 - **`docs/MUNKI.md`.** Client setup, the free-space rule of thumb (2x the
-  game to install, 3x without the preinstall step), and the Gatekeeper step
+  game, which Munki's pre-flight check requires for an install or an
+  upgrade), and the Gatekeeper step
   for hand-installed DMGs.
 
 ## Phase 4: client setup and transport security
@@ -433,7 +439,12 @@ Seven choices shape the work; the plan's pick is given for each.
 - [ ] **Upgrade peak:** a preinstall step that deletes the old copy (2x,
   game briefly missing if the copy fails), a doubled `installed_size`
   (honest check, misleading size in the UI), or accept 3x. Pick: the
-  preinstall step above 20 GiB.
+  preinstall step above 20 GiB. *Reconsider:* the 3x is occupied space and
+  includes the copy already installed, so the extra space an upgrade needs
+  is 2x, which Munki's pre-flight check already requires. An upgrade
+  shouldn't run out of space without the step, and the step doesn't lower
+  the pre-flight requirement. That points to accepting 3x, unless Phase 0
+  measures otherwise.
 - [ ] **DMG format:** UDRO or ULFO, APFS or HFS+, after the Phase 0 numbers.
   Guess: UDRO on APFS.
 - [ ] **Which titles get DMGs:** every game, or only those that run on the

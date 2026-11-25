@@ -181,7 +181,7 @@ Config options worth knowing:
 | `sign_packages: true` (arch repos) | Creates a `.sig` for each package without one. Off by default: with a signing key and clients requiring database signatures (`DatabaseRequired`), the database pins every package's SHA-256. It holds each package in memory and re-signs them all on every publish, so don't use it with multi-GiB packages. |
 | `gnupg_home` + `key_id` (signing) | Signs through `gpg` with an existing keyring instead of `key_file`, for gpg-agent and smartcard keys. This is the only feature that needs `gpg` installed. |
 | `serve.index: false` | Turns off directory listings and the landing page at `/`, which names every repo. On by default. Turn it off on a host the internet can reach. Each repo's own page and `SHA256SUMS` stay, since they list nothing the repo's index doesn't. `-index=false` on `serve` or `nginx-config` does the same for listings. |
-| `serve.public_url` | The address clients reach the release root at, e.g. `https://repo.example`, for the pages' setup snippets. Set it behind a proxy that serves crossdock under a path, or when the pages are served by something other than `serve` or the generated nginx config. |
+| `serve.public_url` | The address clients reach the release root at, e.g. `https://repo.example`, for the pages' setup snippets. Set it behind a proxy that serves crossdock under a path, or when the pages are served by something other than `serve` or the generated nginx config. It may use letters, digits and `. _ ~ : / [ ] % + -` only, since the snippets paste it into shell commands. |
 
 apt repos always set `Acquire-By-Hash: yes` and keep the previous
 generation's indexes under `by-hash/`, so a client that read the old

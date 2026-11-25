@@ -96,6 +96,12 @@ func TestLoadErrors(t *testing.T) {
 		"url fragment":  `{"output":"o","serve":{"public_url":"https://nas/#x"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
 		"url userinfo":  `{"output":"o","serve":{"public_url":"https://u:p@nas"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
 		"index string":  `{"output":"o","serve":{"index":"yes please"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		// public_url is pasted into shell commands, so it must stay one word.
+		"url ampersand": `{"output":"o","serve":{"public_url":"https://repo.example/a&b"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"url semicolon": `{"output":"o","serve":{"public_url":"https://repo.example/a;rm"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"url quote":     `{"output":"o","serve":{"public_url":"https://repo.example/it's"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"url space":     `{"output":"o","serve":{"public_url":"https://repo.example/a b"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
+		"url dollar":    `{"output":"o","serve":{"public_url":"https://repo.example/$HOME"},"repos":[{"name":"a","format":"rpm","source":"s"}]}`,
 	} {
 		p := filepath.Join(t.TempDir(), "c.json")
 		os.WriteFile(p, []byte(body), 0o644)
@@ -164,6 +170,7 @@ func TestServeIndexAndPublicURL(t *testing.T) {
 		"http://nas.lan:8080":           "http://nas.lan:8080",
 		"https://nas.lan/crossdock///":  "https://nas.lan/crossdock",
 		"http://[fd00::5]:8080/mirror/": "http://[fd00::5]:8080/mirror",
+		"https://nas.lan/~jm/a%20b/c+d": "https://nas.lan/~jm/a%20b/c+d",
 	} {
 		if got := load("  public_url: \"" + in + "\"\n").PublicURL; got != want {
 			t.Errorf("public_url %q = %q, want %q", in, got, want)
