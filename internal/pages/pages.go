@@ -357,8 +357,11 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 	l := func(s ...string) { b.WriteString(strings.Join(s, "") + "\n") }
 	switch r.Format {
 	case config.FormatDeb:
+		// The keyring is named for its key, so sources from servers with
+		// different keys don't overwrite each other's.
+		keyring := "/etc/apt/keyrings/crossdock-" + c.RawFingerprint + ".asc"
 		if c.Signed {
-			l("sudo curl -fsSLo /etc/apt/keyrings/crossdock.asc ", base, "/crossdock.asc")
+			l("sudo curl -fsSLo ", keyring, " ", shellQuote(base+"/crossdock.asc"))
 		}
 		l("sudo tee /etc/apt/sources.list.d/", r.Name, ".sources >/dev/null <<'EOF'")
 		l("Types: deb")
@@ -366,7 +369,7 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 		l("Suites: ", r.Suite)
 		l("Components: ", r.Component)
 		if c.Signed {
-			l("Signed-By: /etc/apt/keyrings/crossdock.asc")
+			l("Signed-By: ", keyring)
 		} else {
 			l("Trusted: yes")
 		}
@@ -375,7 +378,7 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 		return "apt", b.String(), nil
 	case config.FormatArch:
 		if c.Signed {
-			l("curl -fsSLO ", base, "/crossdock.asc")
+			l("curl -fsSLO ", shellQuote(base+"/crossdock.asc"))
 			l("sudo pacman-key --add crossdock.asc")
 			l("sudo pacman-key --lsign-key ", c.RawFingerprint)
 		}
@@ -419,6 +422,13 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 		}
 	}
 	return string(r.Format), "", nil
+}
+
+// shellQuote makes s one shell word. URLs in commands are quoted, because
+// an IPv6 host's brackets are a glob pattern, which zsh, macOS's default
+// shell, refuses to run when nothing matches.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // href turns a slash-separated relative path into a safe relative URL.
