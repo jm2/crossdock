@@ -47,9 +47,10 @@ var Rules = []*Rule{
 	{
 		// Indexes that change on every publish: clients must revalidate
 		// (cheap, thanks to Last-Modified / ETag) so they never pair a new
-		// signature with a stale index or vice versa.
+		// signature with a stale index or vice versa. The pages and
+		// SHA256SUMS that publish writes for people change with them.
 		Name: "metadata",
-		Pattern: `(/(InRelease|Release|Release\.gpg|Packages|Packages\.(gz|xz|bz2|zst)|Sources|Sources\.(gz|xz)|repomd\.xml|repomd\.xml\.asc|index|index\.gz)` +
+		Pattern: `(/(InRelease|Release|Release\.gpg|Packages|Packages\.(gz|xz|bz2|zst)|Sources|Sources\.(gz|xz)|repomd\.xml|repomd\.xml\.asc|index|index\.gz|index\.html|SHA256SUMS|SHA256SUMS\.asc)` +
 			`|\.(db|files)|\.(db|files)\.tar\.(gz|xz|zst|bz2)|\.(db|files)\.sig|\.(db|files)\.tar\.(gz|xz|zst|bz2)\.sig` +
 			`|^/crossdock\.(asc|gpg))$`,
 		CacheControl: cacheRevalidate,

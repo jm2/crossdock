@@ -133,11 +133,16 @@ type Package struct {
 
 // NEVRA is name-[epoch:]version-release.arch.
 func (p *Package) NEVRA() string {
+	return p.Name + "-" + p.EVR() + "." + p.Arch
+}
+
+// EVR is [epoch:]version-release, with no epoch when it's zero.
+func (p *Package) EVR() string {
 	evr := p.Version + "-" + p.Release
 	if p.Epoch != "0" && p.Epoch != "" {
 		evr = p.Epoch + ":" + evr
 	}
-	return p.Name + "-" + evr + "." + p.Arch
+	return evr
 }
 
 // FileName is the canonical file name, name-version-release.arch.rpm.

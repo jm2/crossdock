@@ -56,6 +56,10 @@ func Publish(repo config.Repo, env *publish.Env) error {
 				prev.pkg.Path, f, pkg.Name, pkg.Version, pkg.Arch)
 		}
 		e := &entry{pkg: pkg, pool: pool, digest: d}
+		summary, _, _ := strings.Cut(pkg.Control.Get("Description"), "\n")
+		env.Record(publish.PackageFile{Repo: root, Path: path.Join(root, pool),
+			Name: pkg.Name, Version: pkg.Version, Arch: pkg.Arch, Summary: strings.TrimSpace(summary),
+			Size: d.Size, SHA256: d.SHA256})
 		byKey[key] = e
 		entries = append(entries, e)
 		if pkg.Arch != "all" {

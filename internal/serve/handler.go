@@ -4,17 +4,22 @@
 package serve
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"html"
+	"io"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/jm2/crossdock/internal/pages"
 	"github.com/jm2/crossdock/internal/publish"
 )
 
@@ -29,7 +34,8 @@ const ReleaseHeader = "X-Crossdock-Release"
 type Handler struct {
 	// Output is the crossdock output root (the parent of current/).
 	Output string
-	// Index enables minimal HTML directory listings.
+	// Index enables HTML directory listings. A directory's index.html is
+	// served either way.
 	Index bool
 }
 
@@ -78,15 +84,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fi.IsDir() {
-		if !h.Index {
-			http.NotFound(w, r)
-			return
-		}
-		if !strings.HasSuffix(r.URL.Path, "/") {
-			http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
-			return
-		}
-		h.listing(w, r, f)
+		h.dir(w, r, root, name, f)
 		return
 	}
 	if !fi.Mode().IsRegular() {
@@ -94,12 +92,102 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rule := Match(r.URL.Path)
+	h.file(w, r, r.URL.Path, f, fi)
+}
+
+// file serves one regular file with the headers its rule sets.
+func (h *Handler) file(w http.ResponseWriter, r *http.Request, urlPath string, f *os.File, fi os.FileInfo) {
+	rule := Match(urlPath)
 	w.Header().Set("Cache-Control", rule.CacheControl)
-	w.Header().Set("Content-Type", ContentType(r.URL.Path, rule))
-	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, fi.ModTime().UnixNano(), fi.Size()))
+	w.Header().Set("Content-Type", ContentType(urlPath, rule))
+	etag := fmt.Sprintf(`"%x-%x"`, fi.ModTime().UnixNano(), fi.Size())
+	if path.Base(urlPath) == pages.IndexName && fi.Size() <= maxPage {
+		if page, ok := fillBaseURL(f, r); ok {
+			// The body depends on the address the request came to.
+			w.Header().Add("Vary", "X-Forwarded-Proto")
+			w.Header().Set("ETag", fmt.Sprintf(`"%x-%x-%x"`, fi.ModTime().UnixNano(), fi.Size(), crc32.ChecksumIEEE(page)))
+			http.ServeContent(w, r, fi.Name(), fi.ModTime(), bytes.NewReader(page))
+			return
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("ETag", etag)
 	// ServeContent handles HEAD, Range and If-* conditionals.
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+}
+
+// maxPage bounds how much of a page fillBaseURL reads into memory. A
+// larger one is served as published, placeholder and all.
+const maxPage = 64 << 20
+
+// fillBaseURL reads a page and replaces pages.BaseURLPlaceholder with the
+// address r came to. ok is false if there was nothing to replace (the page
+// was published with serve.public_url) or the address isn't usable.
+func fillBaseURL(f *os.File, r *http.Request) ([]byte, bool) {
+	base := requestBaseURL(r)
+	if base == "" {
+		return nil, false
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxPage+1))
+	if err != nil || len(b) > maxPage || !bytes.Contains(b, []byte(pages.BaseURLPlaceholder)) {
+		return nil, false
+	}
+	return bytes.ReplaceAll(b, []byte(pages.BaseURLPlaceholder), []byte(html.EscapeString(base))), true
+}
+
+// hostRE accepts a DNS name, IPv4 address or bracketed IPv6 address, with
+// an optional port: nothing that needs escaping in a page or a shell.
+var hostRE = regexp.MustCompile(`^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:[0-9]{1,5})?$`)
+
+// requestBaseURL is the scheme and host a client used to reach this
+// server, or "" if the Host header isn't a plain host name. A reverse
+// proxy that terminates TLS (Caddy, nginx) says so in X-Forwarded-Proto;
+// it only changes the scheme shown on the page.
+func requestBaseURL(r *http.Request) string {
+	if !hostRE.MatchString(r.Host) {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	switch strings.ToLower(strings.TrimSpace(proto)) {
+	case "https":
+		scheme = "https"
+	case "http":
+		scheme = "http"
+	}
+	return scheme + "://" + r.Host
+}
+
+// dir serves a directory: its index.html if it has one, else a listing if
+// listings are on, else 404.
+func (h *Handler) dir(w http.ResponseWriter, r *http.Request, root *os.Root, name string, d *os.File) {
+	idx, err := root.Open(path.Join(name, pages.IndexName))
+	var ifi os.FileInfo
+	if err == nil {
+		defer idx.Close()
+		if ifi, err = idx.Stat(); err != nil || !ifi.Mode().IsRegular() {
+			ifi = nil
+		}
+	}
+	if ifi == nil && !h.Index {
+		http.NotFound(w, r)
+		return
+	}
+	if !strings.HasSuffix(r.URL.Path, "/") {
+		http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
+		return
+	}
+	if ifi != nil {
+		h.file(w, r, r.URL.Path+pages.IndexName, idx, ifi)
+		return
+	}
+	h.listing(w, r, root, name, d)
 }
 
 // cleanPath turns a URL path into a root-relative file name, refusing
@@ -120,36 +208,61 @@ func cleanPath(p string) (string, bool) {
 	return name, true
 }
 
-func (h *Handler) listing(w http.ResponseWriter, r *http.Request, f *os.File) {
+// listing renders a directory as an HTML table: directories first, then
+// files, each with its size and modification time in UTC. Entries are
+// statted through root, so a symlink shows what it points to, and one that
+// leads out of the release isn't listed at all.
+func (h *Handler) listing(w http.ResponseWriter, r *http.Request, root *os.Root, name string, f *os.File) {
 	entries, err := f.ReadDir(-1)
 	if err != nil {
 		http.Error(w, "read failed", http.StatusInternalServerError)
 		return
 	}
-	var names []string
+	type item struct {
+		name string
+		fi   os.FileInfo
+	}
+	var items []item
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		n := e.Name()
-		if e.IsDir() {
-			n += "/"
+		fi, err := root.Stat(path.Join(name, e.Name()))
+		if err != nil || !(fi.IsDir() || fi.Mode().IsRegular()) {
+			continue
 		}
-		names = append(names, n)
+		items = append(items, item{e.Name(), fi})
 	}
-	sort.Strings(names)
+	sort.Slice(items, func(i, j int) bool {
+		if a, b := items[i].fi.IsDir(), items[j].fi.IsDir(); a != b {
+			return a
+		}
+		return items[i].name < items[j].name
+	})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", cacheRevalidate)
 	title := html.EscapeString(r.URL.Path)
-	fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>%s</title><h1>%s</h1><ul>\n", title, title)
+	var b strings.Builder
+	fmt.Fprintf(&b, "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n"+
+		"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>%s</title>\n<style>%s</style>\n"+
+		"<h1>Index of %s</h1>\n<div class=\"wrap\"><table>\n"+
+		"<thead><tr><th>Name</th><th class=\"num\">Size</th><th>Modified (UTC)</th></tr></thead>\n<tbody>\n",
+		title, pages.Style, title)
 	if r.URL.Path != "/" {
-		fmt.Fprint(w, "<li><a href=\"../\">../</a>\n")
+		b.WriteString("<tr><td><a href=\"../\">../</a></td><td></td><td></td></tr>\n")
 	}
-	for _, n := range names {
-		e := html.EscapeString(n)
-		fmt.Fprintf(w, "<li><a href=\"%s\">%s</a>\n", e, e)
+	for _, it := range items {
+		mod := it.fi.ModTime().UTC().Format("2006-01-02 15:04")
+		if it.fi.IsDir() {
+			fmt.Fprintf(&b, "<tr><td><a href=\"%s/\">%s/</a></td><td class=\"num\">-</td><td>%s</td></tr>\n",
+				html.EscapeString(pages.Href(it.name)), html.EscapeString(it.name), mod)
+			continue
+		}
+		fmt.Fprintf(&b, "<tr><td><a href=\"%s\">%s</a></td><td class=\"num\" title=\"%d bytes\">%s</td><td>%s</td></tr>\n",
+			html.EscapeString(pages.Href(it.name)), html.EscapeString(it.name), it.fi.Size(), pages.HumanSize(it.fi.Size()), mod)
 	}
-	fmt.Fprint(w, "</ul>\n")
+	b.WriteString("</tbody>\n</table></div>\n")
+	io.WriteString(w, b.String())
 }
 
 func (h *Handler) control(w http.ResponseWriter, r *http.Request) {

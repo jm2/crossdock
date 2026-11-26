@@ -116,7 +116,8 @@ jobs:
           build-aux/ci/dnf-smoke.sh internal/rpm/testdata
 
   # The apt end-to-end test on current Debian stable, whose apt verifies
-  # with Sequoia's sqv (the Ubuntu runners' apt uses gpgv).
+  # with Sequoia's sqv (the Ubuntu runners' apt uses gpgv). The pages test
+  # checks each repo's SHA256SUMS.asc with that same sqv.
   apt-debian:
     name: apt against crossdock (debian:stable)
     runs-on: ubuntu-24.04
@@ -137,7 +138,8 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           apt-get --version | head -n 1
-          go test -count=1 -v -run 'TestAptEndToEnd' ./cmd/crossdock
+          sqv --version
+          go test -count=1 -v -run 'TestAptEndToEnd|TestPagesEndToEnd' ./cmd/crossdock
 
   # Real pacman against a signed repo: database and package signatures
   # are checked by pacman's GnuPG, and a tampered database must fail.

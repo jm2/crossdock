@@ -217,6 +217,12 @@ func Publish(repo config.Repo, env *publish.Env) error {
 		if err := env.Release.AddVerified(f, path.Join(root, rel), d); err != nil {
 			return err
 		}
+		var desc struct{ Description string }
+		_ = json.Unmarshal(pkg.Spec, &desc) // validated by ReadPackage
+		summary, _, _ := strings.Cut(desc.Description, "\n")
+		env.Record(publish.PackageFile{Repo: root, Path: path.Join(root, rel),
+			Name: pkg.Name, Version: pkg.Version, Arch: pkg.Arch, Summary: strings.TrimSpace(summary),
+			Size: d.Size, SHA256: d.SHA256})
 		e := &entry{pkg: pkg, rs: repoSpec{
 			Checksum: d.SHA256,
 			// Relative to the repo URL's parent, so it names the repo too.
