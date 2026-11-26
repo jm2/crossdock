@@ -317,6 +317,8 @@ func debParts(files []publish.PackageFile) (map[int][]publish.PackageFile, map[i
 // with `sha256sum -c --ignore-missing`. Copies of one file in several
 // directories share a line. Should two different files ever share a name,
 // both are listed by their path in the repo instead, and byPath is set.
+// A name with a backslash, newline or carriage return is escaped as GNU
+// sha256sum writes it.
 func checksums(dir string, files []publish.PackageFile) (sums []byte, byPath bool) {
 	digests := map[string]map[string]bool{}
 	for _, f := range files {
@@ -326,22 +328,40 @@ func checksums(dir string, files []publish.PackageFile) (sums []byte, byPath boo
 		}
 		digests[n][f.SHA256] = true
 	}
-	lines := map[string]bool{}
+	type entry struct{ name, line string }
+	seen := map[entry]bool{}
+	var entries []entry
 	for _, f := range files {
 		n := path.Base(f.Path)
 		if len(digests[n]) > 1 {
 			n = strings.TrimPrefix(f.Path, dir+"/")
 			byPath = true
 		}
-		lines[f.SHA256+"  "+n+"\n"] = true
-	}
-	sorted := make([]string, 0, len(lines))
-	for l := range lines {
-		sorted = append(sorted, l)
+		e := entry{n, sumLine(f.SHA256, n)}
+		if !seen[e] {
+			seen[e] = true
+			entries = append(entries, e)
+		}
 	}
 	// By file name, as people scan it.
-	slices.SortFunc(sorted, func(a, b string) int { return cmp.Compare(a[66:], b[66:]) })
-	return []byte(strings.Join(sorted, "")), byPath
+	slices.SortFunc(entries, func(a, b entry) int { return cmp.Or(cmp.Compare(a.name, b.name), cmp.Compare(a.line, b.line)) })
+	var b strings.Builder
+	for _, e := range entries {
+		b.WriteString(e.line)
+	}
+	return []byte(b.String()), byPath
+}
+
+// sumEscaper escapes a file name for a checksum line, as GNU coreutils does.
+var sumEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`)
+
+// sumLine is one SHA256SUMS line. A name that needs escaping starts the line
+// with a backslash, which tells sha256sum -c to unescape it.
+func sumLine(sha256, name string) string {
+	if strings.ContainsAny(name, "\\\n\r") {
+		return `\` + sha256 + "  " + sumEscaper.Replace(name) + "\n"
+	}
+	return sha256 + "  " + name + "\n"
 }
 
 // snippet returns the client's name, a shell snippet that sets up the repo,

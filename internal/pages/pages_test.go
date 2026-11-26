@@ -304,6 +304,24 @@ func TestChecksumsNameClash(t *testing.T) {
 	}
 }
 
+func TestChecksumsEscape(t *testing.T) {
+	// Names sha256sum would escape are written as it writes them, sorted
+	// by the name itself.
+	b, _ := checksums("arch/x", []publish.PackageFile{
+		pf("arch/x", "x86_64/b\nc-1-1-any.pkg.tar.zst", "b", "1-1", "any", 1, '1'),
+		pf("arch/x", `x86_64/a\b-1-1-any.pkg.tar.zst`, "a", "1-1", "any", 1, '2'),
+		pf("arch/x", "x86_64/b-1-1-any.pkg.tar.zst", "b", "1-1", "any", 1, '3'),
+		pf("arch/x", "x86_64/c\r-1-1-any.pkg.tar.zst", "c", "1-1", "any", 1, '4'),
+	})
+	want := `\` + strings.Repeat("2", 64) + `  a\\b-1-1-any.pkg.tar.zst` + "\n" +
+		`\` + strings.Repeat("1", 64) + `  b\nc-1-1-any.pkg.tar.zst` + "\n" +
+		strings.Repeat("3", 64) + "  b-1-1-any.pkg.tar.zst\n" +
+		`\` + strings.Repeat("4", 64) + `  c\r-1-1-any.pkg.tar.zst` + "\n"
+	if string(b) != want {
+		t.Errorf("checksums:\n%s\nwant:\n%s", b, want)
+	}
+}
+
 func TestNaturalCompare(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
