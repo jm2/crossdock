@@ -13,6 +13,7 @@ PathChanged=/var/lib/crossdock/incoming/deb
 PathChanged=/var/lib/crossdock/incoming/arch
 PathChanged=/var/lib/crossdock/incoming/rpm
 PathChanged=/var/lib/crossdock/incoming/goo
+PathChanged=/var/lib/crossdock/incoming/munki
 Unit=crossdock-publish.service
 
 [Install]

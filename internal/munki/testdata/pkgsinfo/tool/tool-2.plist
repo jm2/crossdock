@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>_meta</key>
+	<string>x</string>
+	<key>catalogs</key>
+	<array>
+		<string>testing</string>
+	</array>
+	<key>display_name</key>
+	<string>Tool</string>
+	<key>icon_name</key>
+	<string>missing.png</string>
+	<key>installed_size</key>
+	<integer>2048</integer>
+	<key>installer_item_hash</key>
+	<string>90ef2012f318c3811c12f126ca1adfadae2b40a1e1ae9de3fca25ac85f7cc7d8</string>
+	<key>installer_item_location</key>
+	<string>tool/tool-2.dmg</string>
+	<key>installer_item_size</key>
+	<integer>1</integer>
+	<key>installer_type</key>
+	<string>copy_from_dmg</string>
+	<key>installs</key>
+	<array>
+		<dict>
+			<key>CFBundleShortVersionString</key>
+			<string>2</string>
+			<key>path</key>
+			<string>/Applications/Games/tool/version.plist</string>
+			<key>type</key>
+			<string>plist</string>
+		</dict>
+	</array>
+	<key>items_to_copy</key>
+	<array>
+		<dict>
+			<key>destination_path</key>
+			<string>/Applications/Games</string>
+			<key>source_item</key>
+			<string>tool</string>
+		</dict>
+	</array>
+	<key>name</key>
+	<string>tool</string>
+	<key>notes</key>
+	<string>admin only</string>
+	<key>preinstall_script</key>
+	<string>#!/bin/sh
+echo "&lt;scripts pass through&gt;"</string>
+	<key>version</key>
+	<string>2</string>
+</dict>
+</plist>

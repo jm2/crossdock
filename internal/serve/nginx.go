@@ -101,6 +101,9 @@ func WriteNginx(w io.Writer, o NginxOptions) error {
 		p("    location ~ \"%s\" {\n", r.Pattern)
 		p("        add_header Cache-Control \"%s\" always;\n", r.CacheControl)
 		p("        add_header X-Content-Type-Options nosniff always;\n")
+		if r.ForceType {
+			p("        types { }\n")
+		}
 		if r.DefaultType != "" {
 			p("        default_type %s;\n", strings.ReplaceAll(r.DefaultType, "; charset=utf-8", ""))
 		}

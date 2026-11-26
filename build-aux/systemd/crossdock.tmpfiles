@@ -9,3 +9,4 @@ d /var/lib/crossdock/incoming/deb   2775 crossdock crossdock -
 d /var/lib/crossdock/incoming/arch  2775 crossdock crossdock -
 d /var/lib/crossdock/incoming/rpm   2775 crossdock crossdock -
 d /var/lib/crossdock/incoming/goo   2775 crossdock crossdock -
+d /var/lib/crossdock/incoming/munki 2775 crossdock crossdock -

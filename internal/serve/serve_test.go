@@ -39,14 +39,25 @@ func TestMatch(t *testing.T) {
 		"/rpm/jm2/repodata/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-primary.xml.gz": "by-hash",
 		"/rpm/jm2/Packages/a/Archer-3.4.5-6.x86_64.rpm":                                                     "package",
 		"/rpm/jm2/Packages/a/repodata-tool-1-1.noarch.rpm":                                                  "package",
-		"/crossdock.asc":           "metadata",
-		"/index.html":              "metadata",
-		"/deb/jm2/index.html":      "metadata",
-		"/rpm/jm2/SHA256SUMS":      "metadata",
-		"/arch/jm2/SHA256SUMS.asc": "metadata",
-		"/goo/jm2/notindex.html":   "default",
-		"/deb/jm2/crossdock.asc":   "default",
-		"/README.txt":              "default",
+		"/crossdock.asc":                                  "metadata",
+		"/index.html":                                     "metadata",
+		"/deb/jm2/index.html":                             "metadata",
+		"/rpm/jm2/SHA256SUMS":                             "metadata",
+		"/arch/jm2/SHA256SUMS.asc":                        "metadata",
+		"/goo/jm2/notindex.html":                          "default",
+		"/munki/games/catalogs/all":                       "munki",
+		"/munki/games/catalogs/index":                     "munki", // not metadata's /index
+		"/munki/games/manifests/site_default":             "munki",
+		"/munki/games/manifests/by-hash/x":                "munki", // not by-hash's immutable
+		"/munki/games/pkgsinfo/bo3/bo3-1.27.plist":        "munki",
+		"/munki/games/icons/_icon_hashes.plist":           "munki",
+		"/munki/games/icons/bo3.png":                      "default",
+		"/munki/games/pkgs/bo3/bo3-1.27.dmg":              "package",
+		"/munki/games/index.html":                         "metadata",
+		"/munki/games/SHA256SUMS":                         "metadata",
+		"/deb/jm2/pool/main/m/munki/catalogs/x_1_all.deb": "package",
+		"/deb/jm2/crossdock.asc":                          "default",
+		"/README.txt":                                     "default",
 	} {
 		if got := Match(p).Name; got != want {
 			t.Errorf("Match(%q) = %s, want %s", p, got, want)
@@ -56,15 +67,22 @@ func TestMatch(t *testing.T) {
 
 func TestContentType(t *testing.T) {
 	for p, want := range map[string]string{
-		"/x/InRelease":         "text/plain; charset=utf-8",
-		"/x/a.deb":             "application/vnd.debian.binary-package",
-		"/x/a.pkg.tar.zst":     "application/zstd",
-		"/x/jm2.db":            "application/gzip",
-		"/x/a.pkg.tar.zst.sig": "application/pgp-signature",
-		"/x/unknown.bin":       "application/octet-stream",
-		"/x/SHA256SUMS":        "text/plain; charset=utf-8",
-		"/x/SHA256SUMS.asc":    "text/plain; charset=utf-8",
-		"/x/index.html":        "text/html; charset=utf-8",
+		"/x/InRelease":                      "text/plain; charset=utf-8",
+		"/x/a.deb":                          "application/vnd.debian.binary-package",
+		"/x/a.pkg.tar.zst":                  "application/zstd",
+		"/x/jm2.db":                         "application/gzip",
+		"/x/a.pkg.tar.zst.sig":              "application/pgp-signature",
+		"/x/unknown.bin":                    "application/octet-stream",
+		"/x/SHA256SUMS":                     "text/plain; charset=utf-8",
+		"/x/SHA256SUMS.asc":                 "text/plain; charset=utf-8",
+		"/x/index.html":                     "text/html; charset=utf-8",
+		"/munki/g/pkgs/a/a-1.dmg":           "application/x-apple-diskimage",
+		"/munki/g/icons/a.png":              "image/png",
+		"/munki/g/catalogs/production":      "application/xml",
+		"/munki/g/pkgsinfo/a/a-1.plist":     "application/xml",
+		"/munki/g/catalogs/evil.html":       "application/xml", // names come from uploads
+		"/munki/g/manifests/groups/x.json":  "application/xml",
+		"/munki/g/icons/_icon_hashes.plist": "application/xml",
 	} {
 		if got := ContentType(p, Match(p)); got != want {
 			t.Errorf("ContentType(%q) = %q, want %q", p, got, want)
@@ -86,6 +104,7 @@ func fixture(t *testing.T) (string, *publish.Release) {
 		t.Fatal(err)
 	}
 	rel.WriteFile("deb/jm2/dists/stable/InRelease", []byte("signed"))
+	rel.WriteFile("munki/mac/manifests/evil.html", []byte("<plist/>"))
 	rel.WriteFile("arch/jm2/x86_64/jm2.db.tar.gz", []byte("db"))
 	rel.Symlink("jm2.db.tar.gz", "arch/jm2/x86_64/jm2.db")
 	rel.WriteFile(".secret", []byte("no"))
@@ -129,6 +148,16 @@ func TestHandler(t *testing.T) {
 	}
 	if id := r.Header.Get(ReleaseHeader); id != rel.ID {
 		t.Errorf("%s = %q, want %q", ReleaseHeader, id, rel.ID)
+	}
+
+	// Rules match the path of the file opened, so repeated slashes don't
+	// change the headers: an uploaded manifest named evil.html is never
+	// served as HTML.
+	for _, p := range []string{"/munki/mac/manifests/evil.html", "/munki//mac//manifests/evil.html", "//munki/mac/manifests/evil.html"} {
+		r = do(t, h, "GET", p, nil)
+		if ct, cc := r.Header.Get("Content-Type"), r.Header.Get("Cache-Control"); r.StatusCode != 200 || ct != "application/xml" || cc != "no-cache" {
+			t.Errorf("GET %s: %d, Content-Type %q, Cache-Control %q", p, r.StatusCode, ct, cc)
+		}
 	}
 
 	// Internal symlink is followed.

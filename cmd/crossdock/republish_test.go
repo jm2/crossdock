@@ -235,3 +235,30 @@ func TestSourceStateSeesChanges(t *testing.T) {
 		t.Error("a new signature didn't change the state")
 	}
 }
+
+// A Munki sidecar, icon or hand-written manifest that lands after its disk
+// image was read must start another round.
+func TestSourceStateSeesMunkiSidecars(t *testing.T) {
+	work := t.TempDir()
+	src, man := filepath.Join(work, "in"), filepath.Join(work, "manifests")
+	os.Mkdir(src, 0o755)
+	os.Mkdir(man, 0o755)
+	cfgPath := filepath.Join(work, "c.yaml")
+	os.WriteFile(cfgPath, []byte("output: out\nrepos:\n  - {name: m, format: munki, source: in, manifests_source: manifests}\n"), 0o644)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _ := sourceState(cfg)
+	for _, f := range []string{"in/a.dmg", "in/a.dmg.pkginfo", "in/a.dmg.png", "manifests/site"} {
+		os.WriteFile(filepath.Join(work, f), []byte("x"), 0o644)
+		s, err := sourceState(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s == last {
+			t.Errorf("adding %s didn't change the state", f)
+		}
+		last = s
+	}
+}

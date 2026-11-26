@@ -195,7 +195,9 @@ func Publish(repo config.Repo, env *publish.Env) error
    definition.
 6. **M6: browseable repos and Munki** (in progress). Phase 1, done:
    listings on by default, a landing page and per-repo pages, and signed
-   `SHA256SUMS`. Next: a `format: munki` backend for macOS DMGs. See
+   `SHA256SUMS`. Phase 2: a `format: munki` backend for macOS disk images
+   and pkginfo sidecars, checked against Munki's makecatalogs and the real
+   Munki client. Next: producing the disk images in game-packages. See
    [docs/plans/munki-dmg.md](docs/plans/munki-dmg.md).
 
 ## Open questions

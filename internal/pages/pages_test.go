@@ -191,6 +191,41 @@ func TestWriteUnsignedWithPublicURL(t *testing.T) {
 	}
 }
 
+func TestMunkiPage(t *testing.T) {
+	munkiRepo := config.Repo{Name: "mac", Format: config.FormatMunki, SiteDefault: true}
+	e := env(t, testKey(t),
+		pf("munki/mac", "pkgs/bo3/bo3-1.27.dmg", "bo3", "1.27", "arm64", 3<<30, 'a'),
+		pf("munki/mac", "pkgs/loose.dmg", "loose", "", "", 10, 'b'))
+	if err := Write(cfg("", nil, munkiRepo), e, ""); err != nil {
+		t.Fatal(err)
+	}
+	page := read(t, e, "munki/mac/index.html")
+	for _, want := range []string{
+		"Munki · 2 packages · 3.0 GiB",
+		"sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL &#39;" + BaseURLPlaceholder + "/munki/mac&#39;\n",
+		"ClientIdentifier mac\n",
+		"from manifests/site_default",
+		"over HTTPS or a tailnet",
+		"shasum -a 256 -c --ignore-missing SHA256SUMS",
+		"gpgv comes with GnuPG",
+		"Open Anyway",
+		`<a href="./pkgs/bo3/bo3-1.27.dmg">bo3-1.27.dmg</a>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("munki page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "sha256sum -c") {
+		t.Error("munki page tells Mac users to run sha256sum")
+	}
+	if got := read(t, e, "munki/mac/SHA256SUMS"); !strings.Contains(got, "  bo3-1.27.dmg\n") || !strings.Contains(got, "  loose.dmg\n") {
+		t.Errorf("SHA256SUMS = %q", got)
+	}
+	if root := read(t, e, "index.html"); !strings.Contains(root, "SoftwareRepoURL &#39;"+BaseURLPlaceholder+"/munki/mac&#39;") {
+		t.Error("landing page lacks the Munki snippet")
+	}
+}
+
 // A deb too big for one file is split into <name>-dataN parts at the same
 // version; the page lists them under their package with one install line.
 func TestDebParts(t *testing.T) {

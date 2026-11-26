@@ -4,10 +4,12 @@ Nov 25, 2026. Written against `jm2/crossdock` at `f48cf70` and
 `jm2/game-packages` at `8504a75`.
 
 > **Status.** Phase 1 (browseable repos) is implemented as its own PR,
-> and is released together with Phase 2 rather than on its own; see
-> [Phase 1 as built](#phase-1-as-built) for where it differs from the plan
-> below. Phase 0 needs a Mac and real game data. The decisions under
-> [Decisions](#decisions) are still open, except the landing-page URLs.
+> and is released together with Phase 2 rather than on its own. Phase 2
+> (`format: munki`) is implemented. See [Phase 1 as built](#phase-1-as-built)
+> and [Phase 2 as built](#phase-2-as-built) for where they differ from the
+> plan below. Phase 0 needs a Mac and real game data. The decisions under
+> [Decisions](#decisions) are still open, except the landing-page URLs and
+> DMGs without a sidecar.
 
 ## Verdict: mostly agree, with caveats on size
 
@@ -131,10 +133,10 @@ bottleneck.
 
 ## Phase 1: browseable repos by default
 
-Ship this first, as its own PR (released with Phase 2, not on its own; decided
-2026-11-25): directory listings on by default, plus
-static index pages and signed checksums per repo. It makes manual download
-work for every format today, and DMGs inherit it in Phase 2.
+Ship this first, as its own PR (released with Phase 2, not on its own;
+decided 2026-11-25): directory listings on by default, plus static index
+pages and signed checksums per repo. It makes manual download work for
+every format today, and DMGs inherit it in Phase 2.
 
 | File | Change |
 | --- | --- |
@@ -314,6 +316,52 @@ and re-read on every publish.
   on hash, and a killed download that resumes (a 206 in `serve`'s access
   log).
 
+### Phase 2 as built
+
+Where the implementation differs from the plan above, or fills in what it
+left open:
+
+- **Sidecar-less DMGs are download-only** (decided 2026-11-25). They're
+  published at `pkgs/<file>.dmg`, since there's no item name to put in the
+  path, and move to `pkgs/<name>/<file>.dmg` once their sidecar arrives.
+  A sidecar whose own `installer_item_hash` or `installer_item_size`
+  doesn't match the DMG beside it (a new image next to the old sidecar,
+  mid-upload) is treated the same way, with a warning. makepkginfo rounds
+  the size down and crossdock up, so either matches.
+- **Errors stop the publish, as in other formats:** a DMG whose trailer
+  fails the check, an invalid sidecar, a non-PNG icon, a symlinked sidecar,
+  two different DMGs with one name and version, or two that would land on
+  one path. Versions equal under `MunkiVersion` ("1.0" and "1.0.0") count
+  as one version. The same DMG twice is published once.
+- **Generated manifests list every catalog in use,** the repo's `catalog`
+  first, so `manifests/<repo>` really offers every item. Munki takes an
+  item from the first catalog that has it. Splits such as a testing
+  catalog for some Macs go in `manifests_source`.
+- **Sidecar rules added:** `uninstaller_item_location` is refused, as
+  crossdock publishes one file per pkginfo. Names can't end in `.dmg`
+  (download-only files sit beside the name directories), and catalog and
+  manifest names can't be `all` or `index.html`. `architectures` is an
+  error on a munki repo; `supported_architectures` in the sidecar shows in
+  the page's Arch column.
+- **Serving:** catalogs, manifests and `pkgsinfo/` are served as XML
+  whatever their name, since names come from uploads (a catalog called
+  `x.html` must not be served as HTML), and revalidate on every request.
+  The nginx config does the same with `types { }` in that location.
+- **`crossdock inspect`** leaves out `installer_item_hash`, which needs a
+  full read of the DMG, and the repo's catalog, which it doesn't know.
+- **Tests as planned,** with two adjustments. The makecatalogs comparison
+  decodes both sides and compares catalogs as sets, since makecatalogs
+  lists pkginfo files in directory order. It runs in CI only: this
+  session's sandbox wouldn't run the downloaded binary locally. The macOS
+  job (`build-aux/ci/munki-smoke.sh`) cuts a download off by seeding the
+  partial file and the headers Munki keeps in an xattr beside it, rather
+  than killing a download mid-transfer, which is racy on loopback. It
+  checks Munki then fetches only the rest (a 206 for that many bytes).
+- **The page for a Munki repo** shows `shasum -a 256` instead of
+  `sha256sum`, notes that `gpgv` needs GnuPG on a Mac, and explains the
+  Gatekeeper step for hand-installed apps. The landing page has a Munki
+  snippet (`defaults write … SoftwareRepoURL` and `ClientIdentifier`).
+
 ## Phase 3: producing DMGs in game-packages
 
 game-packages gains a `munki` format that builds each DMG on a Mac and
@@ -453,8 +501,9 @@ Seven choices shape the work; the plan's pick is given for each.
   Macs. Pick: only those, given NAS space.
 - [ ] **Mac runtime:** which Wine/D3DMetal build the games use, packaged as
   its own Munki item.
-- [ ] **DMGs without a sidecar:** publish them as download-only, or refuse
-  them. Pick: download-only, which also handles rsync's upload order.
+- [x] **DMGs without a sidecar:** decided 2026-11-25: download-only,
+  which also handles rsync's upload order. See
+  [Phase 2 as built](#phase-2-as-built).
 
 ## Sources
 

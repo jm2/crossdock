@@ -1,14 +1,15 @@
 # crossdock
 
 Publish one pile of package artifacts as signed, static **apt**, **pacman**,
-**RPM** and **GooGet** repositories, from a single Go binary with no distro
-tooling and no containers.
+**RPM** and **GooGet** repositories, plus **Munki** repositories of macOS
+disk images, from a single Go binary with no distro tooling and no
+containers.
 
-> Status: alpha. All four formats publish. apt is tested end to end with
+> Status: alpha. All five formats publish. apt is tested end to end with
 > real apt-get. RPM repodata is checked field for field against
-> createrepo_c, and CI runs real dnf and pacman against it. RPM package
-> header signing and a live GooGet client test are still to come. See
-> [PLAN.md](PLAN.md).
+> createrepo_c, Munki catalogs against Munki's own makecatalogs, and CI
+> runs real dnf, pacman and Munki against them. RPM package header signing
+> and a live GooGet client test are still to come. See [PLAN.md](PLAN.md).
 
 ## Install
 
@@ -28,7 +29,7 @@ The packages install:
 | `/usr/bin/crossdock` | the binary |
 | `/etc/crossdock/crossdock.yaml` | config: `deb`, `arch`, `rpm` and `goo` repos named `local`, served on `:8080` (kept on upgrade) |
 | `crossdock-serve.service` | the read-only server, as a throwaway `DynamicUser`, **LAN-only** |
-| `crossdock-publish.service` / `.path` | republish when files land in `/var/lib/crossdock/incoming/{deb,arch,rpm,goo}` |
+| `crossdock-publish.service` / `.path` | republish when files land in `/var/lib/crossdock/incoming/{deb,arch,rpm,goo,munki}` |
 | `crossdock` account (sysusers.d) | owns `/var/lib/crossdock/repo`; members of its group can upload |
 | `/var/lib/crossdock` (tmpfiles.d) | `repo/` (published, world-readable) and `incoming/` (setgid, group-writable) |
 | firewalld `crossdock` service | opens 8080/tcp |
@@ -55,11 +56,13 @@ rsync -av --no-g --chmod=F664 *.deb nas:/var/lib/crossdock/incoming/deb/
 rsync -av --no-g --chmod=F664 *.pkg.tar.zst nas:/var/lib/crossdock/incoming/arch/
 rsync -av --no-g --chmod=F664 *.rpm nas:/var/lib/crossdock/incoming/rpm/
 rsync -av --no-g --chmod=F664 *.goo nas:/var/lib/crossdock/incoming/goo/
+rsync -av --no-g --chmod=F664 --include='*.dmg' --include='*.dmg.pkginfo' --include='*.dmg.png' --exclude='*' ./ nas:/var/lib/crossdock/incoming/munki/
 ```
 
 Clients then use `http://nas:8080/deb/local`,
 `http://nas:8080/arch/$repo/$arch`, `http://nas:8080/rpm/local` and
-`http://nas:8080/goo/local` (see [Clients](#clients)). Open
+`http://nas:8080/goo/local` (see [Clients](#clients)). The packaged
+config has the Munki repo commented out: see [Munki](#munki-macos). Open
 `http://nas:8080/` in a browser for a ready-to-paste setup snippet for each
 repo, and for pages to download packages by hand (see
 [Browsing and downloading by hand](#browsing-and-downloading-by-hand)).
@@ -181,6 +184,7 @@ Config options worth knowing:
 | `sign_packages: true` (arch repos) | Creates a `.sig` for each package without one. Off by default: with a signing key and clients requiring database signatures (`DatabaseRequired`), the database pins every package's SHA-256. It holds each package in memory and re-signs them all on every publish, so don't use it with multi-GiB packages. |
 | `gnupg_home` + `key_id` (signing) | Signs through `gpg` with an existing keyring instead of `key_file`, for gpg-agent and smartcard keys. This is the only feature that needs `gpg` installed. |
 | `serve.index: false` | Turns off directory listings and the landing page at `/`, which names every repo. On by default. Turn it off on a host the internet can reach. Each repo's own page and `SHA256SUMS` stay, since they list nothing the repo's index doesn't. `-index=false` on `serve` or `nginx-config` does the same for listings. |
+| `catalog`, `site_default`, `manifests_source` (munki repos) | See [Munki](#munki-macos). |
 | `serve.public_url` | The address clients reach the release root at, e.g. `https://repo.example`, for the pages' setup snippets. Set it behind a proxy that serves crossdock under a path, or when the pages are served by something other than `serve` or the generated nginx config. It may use letters, digits and `. _ ~ : / [ ] % + -` only, since the snippets paste it into shell commands. |
 
 apt repos always set `Acquire-By-Hash: yes` and keep the previous
@@ -202,8 +206,8 @@ they behave identically:
 
 | Paths | Cache-Control |
 |---|---|
-| `InRelease`, `Release*`, `Packages*`, `repomd.xml*`, `*.db`/`*.files` (+`.sig`), GooGet `index`, `/crossdock.{asc,gpg}`, `index.html`, `SHA256SUMS{,.asc}`, directory listings | `no-cache` (revalidate via ETag/Last-Modified) |
-| `.deb`, `.rpm`, `.goo`, `.pkg.tar.*` (+`.sig`) | `public, max-age=86400` |
+| `InRelease`, `Release*`, `Packages*`, `repomd.xml*`, `*.db`/`*.files` (+`.sig`), GooGet `index`, Munki `catalogs/`, `manifests/`, `pkgsinfo/` and `icons/_icon_hashes.plist`, `/crossdock.{asc,gpg}`, `index.html`, `SHA256SUMS{,.asc}`, directory listings | `no-cache` (revalidate via ETag/Last-Modified) |
+| `.deb`, `.rpm`, `.goo`, `.dmg`, `.pkg.tar.*` (+`.sig`) | `public, max-age=86400` |
 | `…/by-hash/…` | `public, max-age=31536000, immutable` |
 | everything else | `public, max-age=300` |
 
@@ -233,7 +237,7 @@ include.
 Every publish also writes, as plain files in the release:
 
 - `index.html` at the root: the signing key's fingerprint, and a setup
-  snippet for every repo (apt, pacman, dnf, GooGet). Left out with
+  snippet for every repo (apt, pacman, dnf, GooGet, Munki). Left out with
   `serve.index: false`.
 - `<format>/<repo>/index.html`: each package's version, architecture,
   size and SHA-256, with a download link. A deb split into `<name>-dataN`
@@ -248,6 +252,9 @@ curl -fsSLO https://repo.example/crossdock.gpg -O https://repo.example/deb/jm2/S
 gpgv --keyring ./crossdock.gpg SHA256SUMS.asc SHA256SUMS   # or: sqv --keyring crossdock.gpg SHA256SUMS.asc SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 ```
+
+On a Mac, use `shasum -a 256 -c --ignore-missing SHA256SUMS`; `gpgv` comes
+with GnuPG (`brew install gnupg`).
 
 The snippets need the address clients use. With `serve.public_url` set,
 it's written into the pages. Without it, the pages carry a
@@ -264,7 +271,7 @@ repos. crossdock targets current releases only: Debian stable (13) and newer,
 Fedora 44 and 45, EL10.2 and newer, and Arch. CI runs each one's real
 client against a signed crossdock repo: apt on Debian stable (Sequoia's
 `sqv`) and Ubuntu 24.04 (`gpgv`), dnf5 on Fedora 44 and 45, dnf4 on
-AlmaLinux 10, and pacman on Arch.
+AlmaLinux 10, pacman on Arch, and Munki 7 on macOS.
 
 Keys from `crossdock keygen` are v4 Ed25519. Every one of those clients
 accepts that format. The newer RFC 9580 v6 keys aren't used because
@@ -328,18 +335,87 @@ signatures. Serve it over HTTPS, or keep it on a trusted LAN.
 All clients get the public key from `https://repo.example/crossdock.asc`.
 For pacman, add it with `pacman-key --add` and `--lsign-key`.
 
+Munki (macOS, munkitools 7 from
+[Munki's releases](https://github.com/munki/munki/releases)):
+
+```sh
+sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL https://repo.example/munki/jm2
+sudo defaults write /Library/Preferences/ManagedInstalls ClientIdentifier jm2
+```
+
+Munki catalogs and manifests aren't signed, and a pkginfo can carry
+scripts that Munki runs as root, so anyone who can tamper with the
+connection can run code on the Macs. Serve Munki over HTTPS (`tls internal`
+in Caddy plus `SoftwareRepoCACertificate` on each Mac works on a LAN) or
+only on a tailnet address. See [Munki](#munki-macos) for what to upload.
+
 | Format | Layout under `current/` |
 |---|---|
 | apt | `deb/<repo>/dists/<suite>/…`, `deb/<repo>/pool/<component>/…` |
 | pacman | `arch/<repo>/<arch>/<repo>.{db,files}` + packages |
 | RPM | `rpm/<repo>/repodata/`, `rpm/<repo>/Packages/<l>/…` |
 | GooGet | `goo/<repo>/index{,.gz}`, `goo/<repo>/packages/<name>.<arch>.<ver>.goo` |
+| Munki | `munki/<repo>/{catalogs,manifests,pkgsinfo,icons}/`, `munki/<repo>/pkgs/<name>/<file>.dmg` |
 | every repo | `<format>/<repo>/index.html`, `<format>/<repo>/SHA256SUMS{,.asc}` |
 
 A pacman database holds one version of each package. When an `arch` source has several
 versions of one name and architecture, crossdock publishes the newest (compared as pacman's
-`vercmp` does) and logs the others as skipped. The apt, RPM and GooGet repos publish every
+`vercmp` does) and logs the others as skipped. The apt, RPM, GooGet and Munki repos publish every
 version. In every format, two different files with the same version stop the publish.
+
+### Munki (macOS)
+
+A `munki` repo publishes macOS disk images for Munki's `copy_from_dmg`
+installs. crossdock doesn't look inside the images: it checks each one's
+UDIF trailer (catching truncated uploads), and takes everything else from
+a sidecar. Upload, into the repo's `source`:
+
+- `<file>.dmg`, made with `hdiutil create`.
+- `<file>.dmg.pkginfo`, a pkginfo plist as `makepkginfo` writes it. It must
+  have `name` (letters, digits and `. _ + -`), `version`,
+  `installer_type: copy_from_dmg`, `items_to_copy` (a relative
+  `source_item` and an absolute `destination_path`) and `installed_size`.
+  crossdock sets `installer_item_location`, `installer_item_hash`,
+  `installer_item_size` and, with an icon, `icon_name`. `PackageURL` and
+  `PackageCompleteURL` are refused. Everything else, scripts included,
+  passes through, so only trusted accounts should be able to upload.
+  Without `installs`, Munki can't tell an old copy from a new one, so
+  publish warns.
+- `<file>.dmg.png`, optionally, the item's icon.
+
+A disk image with no sidecar, or with a sidecar whose
+`installer_item_hash` or `installer_item_size` is another file's, is
+published for download only: on the repo's page and in `SHA256SUMS`, but
+in no catalog. rsync uploads `X.dmg` before `X.dmg.pkginfo`, so the next
+publish adds it. Upload the image last if you can.
+
+Every version is published, and Munki installs the newest (versions are
+compared as Munki's `MunkiVersion` does). Sidecars without a `catalogs`
+array go in the repo's `catalog` (default `production`). The output is what
+Munki's `makecatalogs` would write, plus manifests:
+
+```yaml
+- name: games
+  format: munki
+  source: /var/lib/crossdock/incoming/munki
+  catalog: production       # for sidecars without a catalogs array
+  site_default: true        # also publish manifests/site_default
+  manifests_source: /var/lib/crossdock/incoming/munki-manifests   # optional
+```
+
+- `manifests/<repo>` offers every item as an optional install, from every
+  catalog (the repo's own first). Point `ClientIdentifier` at it.
+  `site_default: true` publishes it as `manifests/site_default` too, which
+  Munki falls back to when no manifest matches a Mac.
+- `manifests_source` is a directory of hand-written manifests (for
+  `managed_installs`, or a testing catalog for some Macs), published as
+  they are after checking. Names that aren't in the catalogs, and missing
+  included manifests, are logged as warnings.
+
+A Munki client reads one `SoftwareRepoURL`, so use one Munki repo and
+split it with catalogs and manifests. `crossdock inspect <file>.dmg`
+prints the trailer and the pkginfo as publish would write it (except
+`installer_item_hash`, which takes a full read).
 
 ## Requirements
 

@@ -33,12 +33,14 @@ server {
         application/json                         json;
         application/pgp-signature                sig;
         application/vnd.debian.binary-package    deb;
+        application/x-apple-diskimage            dmg;
         application/x-bzip2                      bz2;
         application/x-rpm                        rpm;
         application/x-tar                        tar;
         application/x-xz                         xz;
-        application/xml                          xml;
+        application/xml                          plist xml;
         application/zstd                         zst;
+        image/png                                png;
         text/html                                html;
         text/plain                               asc txt;
     }
@@ -48,6 +50,14 @@ server {
 
     location ~ /\. { return 404; }
     location ^~ /_crossdock/ { return 404; }
+
+    # munki
+    location ~ "(^/munki/[^/]+/(catalogs|manifests|pkgsinfo)/|^/munki/[^/]+/icons/_icon_hashes\.plist$)" {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        types { }
+        default_type application/xml;
+    }
 
     # by-hash
     location ~ "(/by-hash/|/repodata/[0-9a-f]{64}-[a-z_]+\.xml\.(gz|xz|zst)$)" {
@@ -63,7 +73,7 @@ server {
     }
 
     # package
-    location ~ "\.(deb|rpm|goo|pkg\.tar|pkg\.tar\.(zst|xz|gz|bz2))(\.sig)?$" {
+    location ~ "\.(deb|rpm|goo|dmg|pkg\.tar|pkg\.tar\.(zst|xz|gz|bz2))(\.sig)?$" {
         add_header Cache-Control "public, max-age=86400" always;
         add_header X-Content-Type-Options nosniff always;
     }
