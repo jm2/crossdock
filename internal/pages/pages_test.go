@@ -93,6 +93,10 @@ func TestWriteSigned(t *testing.T) {
 		"baseurl=" + BaseURLPlaceholder + "/rpm/games\n",
 		"googet addrepo win " + BaseURLPlaceholder + "/goo/win\n",
 		"sudo pacman-key --lsign-key " + s.Fingerprint() + "\n",
+		// URLs given to the shell are quoted; apt's keyring is named for the key.
+		"sudo curl -fsSLo /etc/apt/keyrings/crossdock-" + s.Fingerprint() + ".asc &#39;" + BaseURLPlaceholder + "/crossdock.asc&#39;\n",
+		"Signed-By: /etc/apt/keyrings/crossdock-" + s.Fingerprint() + ".asc\n",
+		"curl -fsSLO &#39;" + BaseURLPlaceholder + "/crossdock.asc&#39;\n",
 		groupFingerprint(s.Fingerprint()),
 		`<a href="./deb/games/">deb/games</a>`, `<a href="./goo/win/">goo/win</a>`,
 		"apt · 1 package · 4.0 MiB", "pacman · 1 package · 10 B", "GooGet · 0 packages · 0 B",
@@ -113,7 +117,7 @@ func TestWriteSigned(t *testing.T) {
 		`<a href="./pool/main/b/bo3/bo3_1.27_amd64.deb">bo3_1.27_amd64.deb</a>`,
 		"Black Ops &lt;III&gt; &amp; &#34;friends&#34;",
 		"gpgv --keyring ./crossdock.gpg SHA256SUMS.asc SHA256SUMS",
-		"curl -fsSLO " + BaseURLPlaceholder + "/crossdock.gpg -O " + BaseURLPlaceholder + "/deb/games/SHA256SUMS",
+		"curl -fsSLO '" + BaseURLPlaceholder + "/crossdock.gpg' -O '" + BaseURLPlaceholder + "/deb/games/SHA256SUMS'",
 		"sha256sum -c --ignore-missing SHA256SUMS",
 	} {
 		if !strings.Contains(deb, want) {
@@ -166,7 +170,7 @@ func TestWriteUnsignedWithPublicURL(t *testing.T) {
 	}
 	deb := read(t, e, "deb/games/index.html")
 	for _, want := range []string{"URIs: https://repo.example/crossdock/deb/games\n", "Trusted: yes\n", "These repos are not signed",
-		"curl -fsSLO https://repo.example/crossdock/deb/games/SHA256SUMS\n"} {
+		"curl -fsSLO 'https://repo.example/crossdock/deb/games/SHA256SUMS'\n"} {
 		if !strings.Contains(deb, want) {
 			t.Errorf("deb page lacks %q", want)
 		}

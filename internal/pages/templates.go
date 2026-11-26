@@ -58,9 +58,9 @@ var repoTmpl = template.Must(template.New("repo").Funcs(funcs).Parse(head + keyB
 {{end}}{{template "key" (withRoot .Common "../../")}}
 <h2>Download by hand</h2>
 <p><a href="./{{.SumsName}}">{{.SumsName}}</a>{{if .Signed}} and its signature <a href="./{{.SumsName}}.asc">{{.SumsName}}.asc</a>{{end}} list every package's SHA-256. Check files you downloaded with:</p>
-<pre>{{if .Signed}}curl -fsSLO {{.Base}}/crossdock.gpg -O {{.Base}}/{{.Dir}}/{{.SumsName}} -O {{.Base}}/{{.Dir}}/{{.SumsName}}.asc
+<pre>{{if .Signed}}curl -fsSLO '{{.Base}}/crossdock.gpg' -O '{{.Base}}/{{.Dir}}/{{.SumsName}}' -O '{{.Base}}/{{.Dir}}/{{.SumsName}}.asc'
 gpgv --keyring ./crossdock.gpg {{.SumsName}}.asc {{.SumsName}}    # or: sqv --keyring crossdock.gpg {{.SumsName}}.asc {{.SumsName}}
-{{else}}curl -fsSLO {{.Base}}/{{.Dir}}/{{.SumsName}}
+{{else}}curl -fsSLO '{{.Base}}/{{.Dir}}/{{.SumsName}}'
 {{end}}{{.SumCmd}} -c --ignore-missing {{.SumsName}}</pre>
 {{range .ByHand}}<p class="muted">{{.}}</p>
 {{end}}
