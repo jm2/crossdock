@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-25
+
 ### Added
 
 - **Munki repositories** for macOS. `format: munki` publishes `munki/<repo>/` from disk
@@ -21,10 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   published for download only. CI installs, upgrades and removes an item with the real Munki
   client on macOS, including a resumed download and a disk image refused on its hash.
 - `crossdock inspect` reads `.dmg` files: the UDIF trailer and the pkginfo publish would write.
-
 - **Browseable repos.** Every publish writes a landing page (`index.html` at the release root)
   with the signing key's fingerprint and a ready-to-paste setup snippet for each repo (apt,
-  pacman, dnf, GooGet), and an `index.html` per repo listing each package's version,
+  pacman, dnf, GooGet, Munki), and an `index.html` per repo listing each package's version,
   architecture, size and SHA-256 with a download link. A deb split into `<name>-dataN` parts is
   listed under its package with the one `apt install` line that needs them all.
 - Each repo gets `SHA256SUMS`, in `sha256sum -c` format, and `SHA256SUMS.asc`, a detached
@@ -178,7 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   republishes when packages are uploaded; and a firewalld service. Nothing is enabled at install.
 - `crossdock inspect` prints the metadata crossdock reads from `.deb` and pacman packages.
 
-[Unreleased]: https://github.com/jm2/crossdock/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/jm2/crossdock/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jm2/crossdock/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/jm2/crossdock/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jm2/crossdock/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jm2/crossdock/compare/v0.2.0...v0.2.1

@@ -3,9 +3,8 @@
 Nov 25, 2026. Written against `jm2/crossdock` at `f48cf70` and
 `jm2/game-packages` at `8504a75`.
 
-> **Status.** Phase 1 (browseable repos) is implemented as its own PR,
-> and is released together with Phase 2 rather than on its own. Phase 2
-> (`format: munki`) is implemented. See [Phase 1 as built](#phase-1-as-built)
+> **Status.** Phases 1 (browseable repos, #17) and 2 (`format: munki`,
+> #18) are released together in crossdock 0.3.0. See [Phase 1 as built](#phase-1-as-built)
 > and [Phase 2 as built](#phase-2-as-built) for where they differ from the
 > plan below. Phase 0 needs a Mac and real game data. The decisions under
 > [Decisions](#decisions) are still open, except the landing-page URLs and
