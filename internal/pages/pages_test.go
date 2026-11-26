@@ -202,7 +202,7 @@ func TestMunkiPage(t *testing.T) {
 	page := read(t, e, "munki/mac/index.html")
 	for _, want := range []string{
 		"Munki · 2 packages · 3.0 GiB",
-		"sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL " + BaseURLPlaceholder + "/munki/mac\n",
+		"sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL &#39;" + BaseURLPlaceholder + "/munki/mac&#39;\n",
 		"ClientIdentifier mac\n",
 		"from manifests/site_default",
 		"over HTTPS or a tailnet",
@@ -221,7 +221,7 @@ func TestMunkiPage(t *testing.T) {
 	if got := read(t, e, "munki/mac/SHA256SUMS"); !strings.Contains(got, "  bo3-1.27.dmg\n") || !strings.Contains(got, "  loose.dmg\n") {
 		t.Errorf("SHA256SUMS = %q", got)
 	}
-	if root := read(t, e, "index.html"); !strings.Contains(root, "SoftwareRepoURL "+BaseURLPlaceholder+"/munki/mac") {
+	if root := read(t, e, "index.html"); !strings.Contains(root, "SoftwareRepoURL &#39;"+BaseURLPlaceholder+"/munki/mac&#39;") {
 		t.Error("landing page lacks the Munki snippet")
 	}
 }

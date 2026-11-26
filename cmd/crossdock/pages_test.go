@@ -229,7 +229,7 @@ repos:
 	resp.Body.Close()
 	for _, want := range []string{"URIs: " + srv.URL + "/deb/games\n", "Server = " + srv.URL + "/arch/$repo/$arch\n",
 		"baseurl=" + srv.URL + "/rpm/games\n", "googet addrepo win " + srv.URL + "/goo/win\n",
-		"SoftwareRepoURL " + srv.URL + "/munki/mac\n"} {
+		"SoftwareRepoURL &#39;" + srv.URL + "/munki/mac&#39;\n"} {
 		if !bytes.Contains(root, []byte(want)) {
 			t.Errorf("served landing page lacks %q", want)
 		}

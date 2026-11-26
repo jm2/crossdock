@@ -144,7 +144,7 @@ func Publish(repo config.Repo, env *publish.Env) error {
 	downloadOnly := 0
 	for _, it := range items {
 		dst := path.Join(root, "pkgs", it.rel)
-		if err := env.Release.AddVerified(it.src, dst, it.d); err != nil {
+		if err := storeDMG(env.Release, it, dst); err != nil {
 			return err
 		}
 		pf := publish.PackageFile{Repo: root, Path: dst, Size: it.d.Size, SHA256: it.d.SHA256}
@@ -246,6 +246,20 @@ func compareItems(a, b *item) int {
 		return 0
 	}
 	return CompareVersions(a.pi.Version, b.pi.Version)
+}
+
+// storeDMG adds a disk image to the release at dst, then checks the stored
+// copy's trailer: readItem checked the source's, but the source could have
+// been replaced by a truncated upload before it was hashed, and the stored
+// copy is what the release serves.
+func storeDMG(rel *publish.Release, it *item, dst string) error {
+	if err := rel.AddVerified(it.src, dst, it.d); err != nil {
+		return err
+	}
+	if _, err := ReadTrailer(filepath.Join(rel.Dir, filepath.FromSlash(dst))); err != nil {
+		return fmt.Errorf("%s changed during the publish: %w", it.src, err)
+	}
+	return nil
 }
 
 // readItem checks one disk image and reads its sidecars.

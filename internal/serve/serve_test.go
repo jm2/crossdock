@@ -104,6 +104,7 @@ func fixture(t *testing.T) (string, *publish.Release) {
 		t.Fatal(err)
 	}
 	rel.WriteFile("deb/jm2/dists/stable/InRelease", []byte("signed"))
+	rel.WriteFile("munki/mac/manifests/evil.html", []byte("<plist/>"))
 	rel.WriteFile("arch/jm2/x86_64/jm2.db.tar.gz", []byte("db"))
 	rel.Symlink("jm2.db.tar.gz", "arch/jm2/x86_64/jm2.db")
 	rel.WriteFile(".secret", []byte("no"))
@@ -147,6 +148,16 @@ func TestHandler(t *testing.T) {
 	}
 	if id := r.Header.Get(ReleaseHeader); id != rel.ID {
 		t.Errorf("%s = %q, want %q", ReleaseHeader, id, rel.ID)
+	}
+
+	// Rules match the path of the file opened, so repeated slashes don't
+	// change the headers: an uploaded manifest named evil.html is never
+	// served as HTML.
+	for _, p := range []string{"/munki/mac/manifests/evil.html", "/munki//mac//manifests/evil.html", "//munki/mac/manifests/evil.html"} {
+		r = do(t, h, "GET", p, nil)
+		if ct, cc := r.Header.Get("Content-Type"), r.Header.Get("Cache-Control"); r.StatusCode != 200 || ct != "application/xml" || cc != "no-cache" {
+			t.Errorf("GET %s: %d, Content-Type %q, Cache-Control %q", p, r.StatusCode, ct, cc)
+		}
 	}
 
 	// Internal symlink is followed.

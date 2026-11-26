@@ -529,6 +529,29 @@ func TestPublishErrors(t *testing.T) {
 	}
 }
 
+func TestStoreDMG(t *testing.T) {
+	// The stored copy is checked again, so a source that turned into
+	// something else before it was hashed fails the publish.
+	rel, _ := publish.Begin(t.TempDir(), time.Now())
+	src := filepath.Join(t.TempDir(), "a.dmg")
+	fakeDMG(t, src, "payload")
+	d, err := rel.Digest(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storeDMG(rel, &item{src: src, d: d}, "munki/r/pkgs/a.dmg"); err != nil {
+		t.Errorf("a disk image: %v", err)
+	}
+	truncated := filepath.Join(t.TempDir(), "b.dmg")
+	os.WriteFile(truncated, make([]byte, 4096), 0o644)
+	if d, err = rel.Digest(truncated); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeDMG(rel, &item{src: truncated, d: d}, "munki/r/pkgs/b.dmg"); err == nil || !strings.Contains(err.Error(), "changed during the publish") {
+		t.Errorf("a truncated disk image: %v", err)
+	}
+}
+
 func TestPublishEmpty(t *testing.T) {
 	rel, _, _ := publishFixture(t, config.Repo{Name: "r", Format: config.FormatMunki, Source: t.TempDir(), Catalog: "production"})
 	if v := decodeOut(t, rel, "munki/r/catalogs/all"); !reflect.DeepEqual(v, []any{}) {

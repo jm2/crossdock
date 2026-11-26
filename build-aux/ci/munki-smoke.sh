@@ -196,7 +196,7 @@ echo "removed"
 
 # 7. A download by hand, checked as the repo page says for macOS.
 curl -fsS "$repo/" > "$work/page.html"
-for want in "SoftwareRepoURL $repo" "ClientIdentifier smoke" "shasum -a 256 -c --ignore-missing SHA256SUMS" "crossdock-smoke-1.2.dmg"; do
+for want in "SoftwareRepoURL &#39;$repo&#39;" "ClientIdentifier smoke" "shasum -a 256 -c --ignore-missing SHA256SUMS" "crossdock-smoke-1.2.dmg"; do
   grep -qF "$want" "$work/page.html" || fail "repo page lacks: $want"
 done
 mkdir "$work/byhand"

@@ -92,10 +92,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.file(w, r, r.URL.Path, f, fi)
+	h.file(w, r, "/"+name, f, fi)
 }
 
-// file serves one regular file with the headers its rule sets.
+// file serves one regular file with the headers its rule sets. urlPath is
+// the cleaned path of the file opened, not the request's, so that
+// /munki/x//manifests/m gets the munki rule, as /munki/x/manifests/m does.
 func (h *Handler) file(w http.ResponseWriter, r *http.Request, urlPath string, f *os.File, fi os.FileInfo) {
 	rule := Match(urlPath)
 	w.Header().Set("Cache-Control", rule.CacheControl)
@@ -139,7 +141,8 @@ func fillBaseURL(f *os.File, r *http.Request) ([]byte, bool) {
 }
 
 // hostRE accepts a DNS name, IPv4 address or bracketed IPv6 address, with
-// an optional port: nothing that needs escaping in a page or a shell.
+// an optional port: nothing that needs escaping in a page, or in a shell
+// word in single quotes (the brackets would glob unquoted).
 var hostRE = regexp.MustCompile(`^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:[0-9]{1,5})?$`)
 
 // requestBaseURL is the scheme and host a client used to reach this
@@ -184,7 +187,7 @@ func (h *Handler) dir(w http.ResponseWriter, r *http.Request, root *os.Root, nam
 		return
 	}
 	if ifi != nil {
-		h.file(w, r, r.URL.Path+pages.IndexName, idx, ifi)
+		h.file(w, r, "/"+path.Join(name, pages.IndexName), idx, ifi)
 		return
 	}
 	h.listing(w, r, root, name, d)

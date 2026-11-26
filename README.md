@@ -56,7 +56,7 @@ rsync -av --no-g --chmod=F664 *.deb nas:/var/lib/crossdock/incoming/deb/
 rsync -av --no-g --chmod=F664 *.pkg.tar.zst nas:/var/lib/crossdock/incoming/arch/
 rsync -av --no-g --chmod=F664 *.rpm nas:/var/lib/crossdock/incoming/rpm/
 rsync -av --no-g --chmod=F664 *.goo nas:/var/lib/crossdock/incoming/goo/
-rsync -av --no-g --chmod=F664 *.dmg *.dmg.pkginfo *.dmg.png nas:/var/lib/crossdock/incoming/munki/
+rsync -av --no-g --chmod=F664 --include='*.dmg' --include='*.dmg.pkginfo' --include='*.dmg.png' --exclude='*' ./ nas:/var/lib/crossdock/incoming/munki/
 ```
 
 Clients then use `http://nas:8080/deb/local`,

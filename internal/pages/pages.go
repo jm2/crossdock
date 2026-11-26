@@ -436,7 +436,7 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 			"GooGet has no index signatures: serve it over HTTPS, or keep it on a trusted LAN. It skips http:// repos unless googet.conf sets allowunsafeurl: true.",
 		}
 	case config.FormatMunki:
-		l("sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL ", repoURL)
+		l("sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL ", shellQuote(repoURL))
 		l("sudo defaults write /Library/Preferences/ManagedInstalls ClientIdentifier ", r.Name)
 		l("sudo /usr/local/munki/managedsoftwareupdate --checkonly")
 		notes := []string{

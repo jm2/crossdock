@@ -121,6 +121,29 @@ func TestPlistDataWrapping(t *testing.T) {
 	}
 }
 
+func TestPlistCarriageReturn(t *testing.T) {
+	// A CR written as a character reference survives; a literal one would
+	// come back as a newline, and could make two keys one.
+	in := `<?xml version="1.0"?><plist version="1.0"><dict>` +
+		`<key>k&#13;</key><string>a&#13;b</string><key>k&#10;</key><string>a&#13;&#10;b</string>` +
+		`</dict></plist>`
+	want := map[string]any{"k\r": "a\rb", "k\n": "a\r\nb"}
+	v, err := DecodePlist([]byte(in))
+	if err != nil || !reflect.DeepEqual(v, want) {
+		t.Fatalf("decoded %#v, %v", v, err)
+	}
+	out, err := EncodePlist(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "<string>a&#13;b</string>") {
+		t.Errorf("CR not escaped:\n%s", out)
+	}
+	if again, err := DecodePlist(out); err != nil || !reflect.DeepEqual(again, want) {
+		t.Errorf("re-decoded %#v, %v", again, err)
+	}
+}
+
 func TestPlistErrors(t *testing.T) {
 	wrap := func(s string) string { return `<?xml version="1.0"?><plist version="1.0">` + s + `</plist>` }
 	for _, c := range []struct{ in, want string }{

@@ -368,7 +368,8 @@ func formatReal(f float64) string {
 	return strconv.FormatFloat(f, 'g', 17, 64)
 }
 
-// escape escapes text the way CoreFoundation does (&, < and > only), and
+// escape escapes text the way CoreFoundation does (&, < and >), plus
+// carriage returns, which an XML parser would read back as newlines, and
 // refuses what XML 1.0 can't carry.
 func escape(s string) (string, error) {
 	if !utf8.ValidString(s) {
@@ -379,5 +380,5 @@ func escape(s string) (string, error) {
 			return "", fmt.Errorf("character %U can't be stored in XML", r)
 		}
 	}
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s), nil
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\r", "&#13;").Replace(s), nil
 }
