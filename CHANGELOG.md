@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GooGet needs for `http://` repos, unless it's already set. The page marks those lines, and
   `crossdock serve` and the generated nginx config comment them out for HTTPS requests (pages
   for a `public_url` include them or not by its scheme). The nginx config gains two `map`s and
-  `sub_filter` lines for this.
+  `sub_filter` lines for this: **regenerate nginx configs made by 0.3.0 or earlier** with
+  `crossdock nginx-config`, or HTTPS visitors see the lines. Other servers show them too, so
+  set an `https://` `public_url` for those.
 
 ## [0.3.0] — 2026-11-25
 

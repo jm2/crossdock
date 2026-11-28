@@ -416,7 +416,7 @@ func snippetText(r config.Repo, c Common) (string, string, []string) {
 			b.WriteString(HTTPOnlyStart)
 			lines()
 			b.WriteString(HTTPOnlyEnd)
-		case strings.HasPrefix(base, "http://"):
+		case strings.HasPrefix(strings.ToLower(base), "http://"): // public_url's scheme may be upper case
 			lines()
 		}
 	}
@@ -482,28 +482,42 @@ func snippetText(r config.Repo, c Common) (string, string, []string) {
 	case config.FormatGoo:
 		// PowerShell, so the URLs are in its single quotes (none of them
 		// holds a quote).
+		// The SHA-256 comes from .NET, not Get-FileHash: that's a script
+		// module function, which Windows client's default execution policy
+		// (Restricted) may refuse to load.
 		l("if (-not (Get-Command googet -ErrorAction SilentlyContinue)) {")
 		l("  $goo = Join-Path $env:TEMP googet.goo")
 		l("  curl.exe -fsSLo $goo '", googetGooURL, "'")
-		l("  if ((Get-FileHash $goo).Hash -ne '", googetGooSHA256, "') { throw 'googet.goo: SHA-256 mismatch' }")
+		l("  if ($LASTEXITCODE) { throw 'googet.goo: download failed' }")
+		l("  $sha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($goo))) -replace '-'")
+		l("  if ($sha -ne '", googetGooSHA256, "') { throw 'googet.goo: SHA-256 mismatch' }")
 		l("  tar.exe -xf $goo -C $env:TEMP googet.exe")
 		l(`  & "$env:TEMP\googet.exe" -root "$env:ProgramData\GooGet" -noconfirm install -sources '`, googetRepo, "' googet")
+		l("  if ($LASTEXITCODE) { throw 'googet could not install itself (is this PowerShell elevated?)' }")
 		l(`  Remove-Item $goo, "$env:TEMP\googet.exe"`)
-		// googet's install sets these machine-wide; this session needs them
-		// too, as googet refuses to run without a root. Prepending keeps the
-		// session's own PATH entries.
+		// googet's install sets GooGetRoot and PATH machine-wide, but this
+		// session needs them too, as googet refuses to run without a root.
+		// Prepending keeps the session's own PATH entries. The install
+		// writes the registry without telling Windows, so new windows
+		// wouldn't see either until the next sign-in: setting GooGetRoot
+		// again through .NET broadcasts the change (Path is left alone, as
+		// rewriting it that way would expand its %variables%).
 		l(`  $env:GooGetRoot = "$env:ProgramData\GooGet"`)
+		l("  [Environment]::SetEnvironmentVariable('GooGetRoot', $env:GooGetRoot, 'Machine')")
 		l(`  $env:Path = "$env:GooGetRoot;$env:Path"`)
 		l("}")
 		// GooGet skips http:// repos unless googet.conf allows them. Set
 		// it, replacing any allowunsafeurl line, unless it's already set.
 		// Test-Path first: on a missing file, Windows PowerShell's
 		// Select-String stops the statement whatever -ErrorAction says.
+		// googet's YAML keys are case-sensitive, hence -cmatch. Without
+		// GooGetRoot (googet missing, the lines pasted one at a time after
+		// a failed install), it writes nothing rather than \googet.conf.
 		httpOnly(func() {
 			l(`$conf = "$env:GooGetRoot\googet.conf"`)
 			l("$lines = @(if (Test-Path $conf) { Get-Content $conf })")
-			l(`if (-not ($lines -match '^allowunsafeurl:\s*true\s*$')) {`)
-			l("  Set-Content $conf (@($lines -notmatch '^allowunsafeurl:') + 'allowunsafeurl: true')")
+			l(`if ($env:GooGetRoot -and -not ($lines -cmatch '^allowunsafeurl:\s*true\s*$')) {`)
+			l("  Set-Content $conf (@($lines -cnotmatch '^allowunsafeurl:') + 'allowunsafeurl: true')")
 			l("}")
 		})
 		l("googet addrepo ", r.Name, " ", repoURL)

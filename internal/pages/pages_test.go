@@ -111,14 +111,15 @@ func TestWriteSigned(t *testing.T) {
 	gooSetup := []string{
 		"if (-not (Get-Command googet -ErrorAction SilentlyContinue)) {\n",
 		"curl.exe -fsSLo $goo &#39;" + googetGooURL + "&#39;\n",
-		"if ((Get-FileHash $goo).Hash -ne &#39;" + googetGooSHA256 + "&#39;) { throw",
+		"if ($sha -ne &#39;" + googetGooSHA256 + "&#39;) { throw",
+		"[Environment]::SetEnvironmentVariable(&#39;GooGetRoot&#39;, $env:GooGetRoot, &#39;Machine&#39;)\n",
 		"-noconfirm install -sources &#39;" + googetRepo + "&#39; googet\n",
 		"$env:GooGetRoot = &#34;$env:ProgramData\\GooGet&#34;\n",
 		// Prepended, so the session's own PATH entries stay.
 		"$env:Path = &#34;$env:GooGetRoot;$env:Path&#34;\n}\n" + HTTPOnlyStart + "$conf = ",
 		// allowunsafeurl, marked as only for plain HTTP.
 		"$lines = @(if (Test-Path $conf) { Get-Content $conf })\n",
-		"Set-Content $conf (@($lines -notmatch &#39;^allowunsafeurl:&#39;) + &#39;allowunsafeurl: true&#39;)\n}\n" +
+		"Set-Content $conf (@($lines -cnotmatch &#39;^allowunsafeurl:&#39;) + &#39;allowunsafeurl: true&#39;)\n}\n" +
 			HTTPOnlyEnd + "googet addrepo win " + BaseURLPlaceholder + "/goo/win\n",
 	}
 	for _, want := range gooSetup {
@@ -189,6 +190,7 @@ func TestGooHTTPOnly(t *testing.T) {
 	}{
 		{"", true, true},
 		{"http://repo.lan:8080", true, false},
+		{"HTTP://repo.lan:8080", true, false},
 		{"https://repo.example", false, false},
 	} {
 		e := env(t, nil)

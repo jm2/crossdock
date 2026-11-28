@@ -5,10 +5,11 @@
 # GooGet under %ProgramData%, so not on your own machine). It:
 #
 #   1. builds a small .goo with tar.exe and publishes it
-#   2. runs the snippet in Windows PowerShell, as an administrator would
-#      paste it: googet is missing, so its if block installs GooGet from
-#      Google's repo; the page comes over plain HTTP, so the snippet sets
-#      allowunsafeurl in googet.conf; and the rest adds the crossdock repo
+#   2. runs the snippet in Windows PowerShell as pasted commands, under
+#      Windows client's default execution policy (Restricted): googet is
+#      missing, so its if block installs GooGet from Google's repo; the
+#      page comes over plain HTTP, so the snippet sets allowunsafeurl in
+#      googet.conf; and the rest adds the crossdock repo
 #   3. installs the package from the repo and checks its file
 #   4. runs the if block again, which must leave GooGet alone
 #
@@ -21,6 +22,13 @@ Set-StrictMode -Version Latest
 $crossdock = if ($env:CROSSDOCK) { $env:CROSSDOCK } else { 'crossdock' }
 $work = Join-Path ([IO.Path]::GetTempPath()) "googet-smoke-$PID"
 $base = 'http://127.0.0.1:8088'
+# paste runs code the way pasting it into Windows PowerShell does: as
+# commands, not a script file, under Restricted, which refuses script files
+# and script modules. It returns powershell.exe's exit code.
+function paste([string]$code) {
+  powershell.exe -NoProfile -ExecutionPolicy Restricted -EncodedCommand ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))) | Out-Host
+  $LASTEXITCODE
+}
 $root = Join-Path $env:ProgramData GooGet
 function Fail([string]$msg) {
   Write-Output "::error title=googet smoke::$msg"
@@ -65,11 +73,10 @@ try {
     ForEach-Object { [Net.WebUtility]::HtmlDecode(($_.Groups[1].Value -replace '(?s)<!--.*?-->', '')) } |
     Where-Object { $_ -match '(?m)^googet addrepo smoke ' } | Select-Object -First 1
   if (-not $snippet) { Fail 'landing page lacks the GooGet snippet' }
-  Set-Content "$work\snippet.ps1" $snippet
-  $snippet.Substring(0, $snippet.IndexOf("`n}") + 2) | Set-Content "$work\install-googet.ps1"
+  $snippet
+  $installBlock = $snippet.Substring(0, $snippet.IndexOf("`n}") + 2)
   if (-not $snippet.Contains("'allowunsafeurl: true'")) { Fail 'the plain-HTTP page lacks the allowunsafeurl lines' }
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$work\snippet.ps1"
-  if ($LASTEXITCODE) { Fail "the landing page's GooGet snippet failed" }
+  if (paste $snippet) { Fail "the landing page's GooGet snippet failed" }
   # This session predates the install: take what it set machine-wide.
   $env:GooGetRoot = [Environment]::GetEnvironmentVariable('GooGetRoot', 'Machine')
   if ($env:GooGetRoot -ne $root) { Fail "GooGet's install set GooGetRoot to '$env:GooGetRoot', not $root" }
@@ -94,8 +101,7 @@ try {
   # 4. With GooGet there, the if block does nothing.
   $exe = Get-Item "$root\googet.exe"
   $before = $exe.LastWriteTimeUtc
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$work\install-googet.ps1"
-  if ($LASTEXITCODE) { Fail 'the if block failed with GooGet installed' }
+  if (paste $installBlock) { Fail 'the if block failed with GooGet installed' }
   if ((Get-Item "$root\googet.exe").LastWriteTimeUtc -ne $before -or (Test-Path (Join-Path $env:TEMP googet.goo))) {
     Fail 'the if block reinstalled GooGet'
   }
