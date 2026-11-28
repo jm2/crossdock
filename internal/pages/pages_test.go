@@ -117,7 +117,8 @@ func TestWriteSigned(t *testing.T) {
 		// Prepended, so the session's own PATH entries stay.
 		"$env:Path = &#34;$env:GooGetRoot;$env:Path&#34;\n}\n" + HTTPOnlyStart + "$conf = ",
 		// allowunsafeurl, marked as only for plain HTTP.
-		"Set-Content $conf ((@(Get-Content $conf -ErrorAction SilentlyContinue) -notmatch &#39;^allowunsafeurl:&#39;) + &#39;allowunsafeurl: true&#39;)\n}\n" +
+		"$lines = @(if (Test-Path $conf) { Get-Content $conf })\n",
+		"Set-Content $conf (@($lines -notmatch &#39;^allowunsafeurl:&#39;) + &#39;allowunsafeurl: true&#39;)\n}\n" +
 			HTTPOnlyEnd + "googet addrepo win " + BaseURLPlaceholder + "/goo/win\n",
 	}
 	for _, want := range gooSetup {

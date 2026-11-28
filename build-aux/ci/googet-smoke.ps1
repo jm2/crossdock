@@ -79,7 +79,9 @@ try {
   $installed
   if ($installed -notmatch 'googet\.x86_64') { Fail "googet doesn't list itself as installed" }
   "installed GooGet with the landing page's snippet"
-  if (-not (Select-String -Quiet '^allowunsafeurl:\s*true\s*$' "$root\googet.conf")) { Fail "the snippet didn't set allowunsafeurl in googet.conf" }
+  if (-not ((Test-Path "$root\googet.conf") -and (Select-String -Quiet '^allowunsafeurl:\s*true\s*$' "$root\googet.conf"))) {
+    Fail "the snippet didn't set allowunsafeurl in googet.conf"
+  }
   'the snippet set allowunsafeurl: true in googet.conf'
 
   # 3. A package from the crossdock repo.

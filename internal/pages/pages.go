@@ -497,10 +497,13 @@ func snippetText(r config.Repo, c Common) (string, string, []string) {
 		l("}")
 		// GooGet skips http:// repos unless googet.conf allows them. Set
 		// it, replacing any allowunsafeurl line, unless it's already set.
+		// Test-Path first: on a missing file, Windows PowerShell's
+		// Select-String stops the statement whatever -ErrorAction says.
 		httpOnly(func() {
 			l(`$conf = "$env:GooGetRoot\googet.conf"`)
-			l(`if (-not (Select-String -Quiet '^allowunsafeurl:\s*true\s*$' $conf -ErrorAction SilentlyContinue)) {`)
-			l("  Set-Content $conf ((@(Get-Content $conf -ErrorAction SilentlyContinue) -notmatch '^allowunsafeurl:') + 'allowunsafeurl: true')")
+			l("$lines = @(if (Test-Path $conf) { Get-Content $conf })")
+			l(`if (-not ($lines -match '^allowunsafeurl:\s*true\s*$')) {`)
+			l("  Set-Content $conf (@($lines -notmatch '^allowunsafeurl:') + 'allowunsafeurl: true')")
 			l("}")
 		})
 		l("googet addrepo ", r.Name, " ", repoURL)
