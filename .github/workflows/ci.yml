@@ -205,9 +205,9 @@ jobs:
         if: failure()
         run: sudo cat "/Library/Managed Installs/Logs/ManagedSoftwareUpdate.log" || true
 
-  # The landing page's GooGet snippet on a Windows runner without GooGet: it
-  # installs GooGet from Google's repo, adds a goo repo served by
-  # `crossdock serve`, and installs a package from it.
+  # The landing page's GooGet snippet on a Windows runner without GooGet, in
+  # Constrained Language Mode: it installs GooGet from Google's repo, adds a
+  # goo repo served by `crossdock serve`, and installs a package from it.
   googet:
     name: GooGet snippet against crossdock (Windows)
     runs-on: windows-latest

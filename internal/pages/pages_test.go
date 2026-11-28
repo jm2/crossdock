@@ -111,8 +111,9 @@ func TestWriteSigned(t *testing.T) {
 	gooSetup := []string{
 		"if (-not (Get-Command googet -ErrorAction SilentlyContinue)) {\n",
 		"curl.exe -fsSLo $goo &#39;" + googetGooURL + "&#39;\n",
+		"$sha = (certutil.exe -hashfile $goo SHA256)[1] -replace &#39; &#39;\n",
 		"if ($sha -ne &#39;" + googetGooSHA256 + "&#39;) { throw",
-		"[Environment]::SetEnvironmentVariable(&#39;GooGetRoot&#39;, $env:GooGetRoot, &#39;Machine&#39;)\n",
+		"setx.exe GooGetRoot $env:GooGetRoot /M &gt; $null\n",
 		"-noconfirm install -sources &#39;" + googetRepo + "&#39; googet\n",
 		"$env:GooGetRoot = &#34;$env:ProgramData\\GooGet&#34;\n",
 		// Prepended, so the session's own PATH entries stay.
@@ -182,6 +183,18 @@ func TestWriteSigned(t *testing.T) {
 // GooGet's allowunsafeurl lines are marked for the server to drop over
 // HTTPS when the address is the placeholder, and written or left out by
 // public_url's scheme otherwise.
+// TestGooConstrainedLanguage keeps .NET out of the GooGet snippet:
+// Constrained Language Mode refuses methods on all but a few core types
+// (CI's Windows job runs the snippet in that mode).
+func TestGooConstrainedLanguage(t *testing.T) {
+	_, text, _ := snippetText(gooRepo, Common{Base: "http://repo.lan:8080"})
+	for _, bad := range []string{"]::", "New-Object", "Add-Type", "Get-FileHash"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("GooGet snippet has %q, which Constrained Language Mode or the Restricted policy may refuse", bad)
+		}
+	}
+}
+
 func TestGooHTTPOnly(t *testing.T) {
 	const line = "Set-Content $conf ("
 	for _, c := range []struct {
