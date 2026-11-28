@@ -126,8 +126,10 @@ func (h *Handler) file(w http.ResponseWriter, r *http.Request, urlPath string, f
 const maxPage = 64 << 20
 
 // fillBaseURL reads a page and replaces pages.BaseURLPlaceholder with the
-// address r came to. ok is false if there was nothing to replace (the page
-// was published with serve.public_url) or the address isn't usable.
+// address r came to. For an HTTPS address it also comments out the lines
+// between pages.HTTPOnlyStart and pages.HTTPOnlyEnd, which only plain HTTP
+// needs. ok is false if there was nothing to replace (the page was
+// published with serve.public_url) or the address isn't usable.
 func fillBaseURL(f *os.File, r *http.Request) ([]byte, bool) {
 	base := requestBaseURL(r)
 	if base == "" {
@@ -137,7 +139,12 @@ func fillBaseURL(f *os.File, r *http.Request) ([]byte, bool) {
 	if err != nil || len(b) > maxPage || !bytes.Contains(b, []byte(pages.BaseURLPlaceholder)) {
 		return nil, false
 	}
-	return bytes.ReplaceAll(b, []byte(pages.BaseURLPlaceholder), []byte(html.EscapeString(base))), true
+	b = bytes.ReplaceAll(b, []byte(pages.BaseURLPlaceholder), []byte(html.EscapeString(base)))
+	if strings.HasPrefix(base, "https://") {
+		b = bytes.ReplaceAll(b, []byte(pages.HTTPOnlyStart), []byte("<!--"))
+		b = bytes.ReplaceAll(b, []byte(pages.HTTPOnlyEnd), []byte("-->"))
+	}
+	return b, true
 }
 
 // hostRE accepts a DNS name, IPv4 address or bracketed IPv6 address, with

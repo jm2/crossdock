@@ -10,6 +10,17 @@ map $http_host $crossdock_base_url {
     default "http://&lt;host&gt;:8080";
 }
 
+# Lines only a plain-HTTP address needs (GooGet's allowunsafeurl) sit
+# between these markers. For an HTTPS request they're commented out.
+map $scheme $crossdock_http_only_start {
+    https "<!--";
+    default "<!--crossdock:http-only-->";
+}
+map $scheme $crossdock_http_only_end {
+    https "-->";
+    default "<!--/crossdock:http-only-->";
+}
+
 server {
     listen 80;
     server_name repo.example;
@@ -26,6 +37,8 @@ server {
     autoindex_localtime off;  # UTC, like crossdock serve
     sub_filter_once off;
     sub_filter "http://&lt;host&gt;:8080" $crossdock_base_url;
+    sub_filter "<!--crossdock:http-only-->" $crossdock_http_only_start;
+    sub_filter "<!--/crossdock:http-only-->" $crossdock_http_only_end;
     add_header X-Content-Type-Options nosniff always;
 
     types {

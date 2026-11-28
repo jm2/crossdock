@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The landing page's GooGet and Munki snippets install their client where it's missing, and
+  skip it where it's there. For GooGet, it takes `googet.exe` from Google's googet package in
+  Google's Compute Engine repository (20261003.00, googet 3.4.0), pinned by SHA-256, and has it
+  install googet from that repo. For Munki, it installs munkitools 7.4.2 from Munki's releases,
+  pinned by SHA-256. CI runs both for real: the Munki job installs munkitools with the page's
+  block, and a new Windows job installs GooGet with the page's snippet, then a package from a
+  goo repo served by `crossdock serve`.
+- Over plain HTTP, the GooGet snippet also sets `allowunsafeurl: true` in `googet.conf`, which
+  GooGet needs for `http://` repos, unless it's already set. The page marks those lines, and
+  `crossdock serve` and the generated nginx config comment them out for HTTPS requests (pages
+  for a `public_url` include them or not by its scheme). The nginx config gains two `map`s and
+  `sub_filter` lines for this: **regenerate nginx configs made by 0.3.0 or earlier** with
+  `crossdock nginx-config`, or HTTPS visitors see the lines. Other servers show them too, so
+  set an `https://` `public_url` for those.
+
 ## [0.3.0] — 2026-11-25
 
 ### Added

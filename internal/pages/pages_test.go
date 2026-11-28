@@ -106,6 +106,27 @@ func TestWriteSigned(t *testing.T) {
 			t.Errorf("root page lacks %q", want)
 		}
 	}
+	// The GooGet snippet installs googet first where it's missing, from
+	// Google's package pinned by SHA-256.
+	gooSetup := []string{
+		"if (-not (Get-Command googet -ErrorAction SilentlyContinue)) {\n",
+		"curl.exe -fsSLo $goo &#39;" + googetGooURL + "&#39;\n",
+		"if ($sha -ne &#39;" + googetGooSHA256 + "&#39;) { throw",
+		"[Environment]::SetEnvironmentVariable(&#39;GooGetRoot&#39;, $env:GooGetRoot, &#39;Machine&#39;)\n",
+		"-noconfirm install -sources &#39;" + googetRepo + "&#39; googet\n",
+		"$env:GooGetRoot = &#34;$env:ProgramData\\GooGet&#34;\n",
+		// Prepended, so the session's own PATH entries stay.
+		"$env:Path = &#34;$env:GooGetRoot;$env:Path&#34;\n}\n" + HTTPOnlyStart + "$conf = ",
+		// allowunsafeurl, marked as only for plain HTTP.
+		"$lines = @(if (Test-Path $conf) { Get-Content $conf })\n",
+		"Set-Content $conf (@($lines -cnotmatch &#39;^allowunsafeurl:&#39;) + &#39;allowunsafeurl: true&#39;)\n}\n" +
+			HTTPOnlyEnd + "googet addrepo win " + BaseURLPlaceholder + "/goo/win\n",
+	}
+	for _, want := range gooSetup {
+		if !strings.Contains(root, want) {
+			t.Errorf("root page's GooGet snippet lacks %q", want)
+		}
+	}
 	// Repos are in format, then name order.
 	if strings.Index(root, "arch/games") > strings.Index(root, "deb/games") || strings.Index(root, "goo/win") > strings.Index(root, "rpm/games") {
 		t.Error("repos out of order")
@@ -158,6 +179,37 @@ func TestWriteSigned(t *testing.T) {
 	}
 }
 
+// GooGet's allowunsafeurl lines are marked for the server to drop over
+// HTTPS when the address is the placeholder, and written or left out by
+// public_url's scheme otherwise.
+func TestGooHTTPOnly(t *testing.T) {
+	const line = "Set-Content $conf ("
+	for _, c := range []struct {
+		publicURL     string
+		lines, marked bool
+	}{
+		{"", true, true},
+		{"http://repo.lan:8080", true, false},
+		{"HTTP://repo.lan:8080", true, false},
+		{"https://repo.example", false, false},
+	} {
+		e := env(t, nil)
+		if err := Write(cfg(c.publicURL, nil, gooRepo), e, ""); err != nil {
+			t.Fatal(err)
+		}
+		page := read(t, e, "goo/win/index.html")
+		if got := strings.Contains(page, line); got != c.lines {
+			t.Errorf("public_url %q: allowunsafeurl lines = %v, want %v", c.publicURL, got, c.lines)
+		}
+		if got := strings.Contains(page, HTTPOnlyStart) && strings.Contains(page, HTTPOnlyEnd); got != c.marked {
+			t.Errorf("public_url %q: markers = %v, want %v", c.publicURL, got, c.marked)
+		}
+		if !strings.Contains(page, "googet addrepo win ") {
+			t.Errorf("public_url %q: no addrepo line", c.publicURL)
+		}
+	}
+}
+
 func TestWriteUnsignedWithPublicURL(t *testing.T) {
 	off := false
 	e := env(t, nil, pf("deb/games", "pool/main/h/hello/hello_1_all.deb", "hello", "1", "all", 1, 'a'))
@@ -202,7 +254,12 @@ func TestMunkiPage(t *testing.T) {
 	page := read(t, e, "munki/mac/index.html")
 	for _, want := range []string{
 		"Munki · 2 packages · 3.0 GiB",
-		"sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL &#39;" + BaseURLPlaceholder + "/munki/mac&#39;\n",
+		// munkitools first where it's missing, pinned by SHA-256.
+		"if [ ! -x /usr/local/munki/managedsoftwareupdate ]; then\n",
+		"curl -fsSLO &#39;" + munkitoolsURL + "&#39; &amp;&amp;\n",
+		"echo &#39;" + munkitoolsSHA256 + "  " + munkitoolsPkg + "&#39; | shasum -a 256 -c &amp;&amp;\n",
+		"sudo installer -pkg " + munkitoolsPkg + " -target /)\n",
+		"fi\nsudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL &#39;" + BaseURLPlaceholder + "/munki/mac&#39;\n",
 		"ClientIdentifier mac\n",
 		"from manifests/site_default",
 		"over HTTPS or a tailnet",

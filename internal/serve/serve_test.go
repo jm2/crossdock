@@ -239,7 +239,8 @@ func pageFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel.WriteFile("index.html", []byte("<pre>URIs: "+pages.BaseURLPlaceholder+"/deb/jm2\ngpgkey="+pages.BaseURLPlaceholder+"/crossdock.asc</pre>"))
+	rel.WriteFile("index.html", []byte("<pre>URIs: "+pages.BaseURLPlaceholder+"/deb/jm2\ngpgkey="+pages.BaseURLPlaceholder+"/crossdock.asc\n"+
+		pages.HTTPOnlyStart+"allowunsafeurl\n"+pages.HTTPOnlyEnd+"addrepo</pre>"))
 	rel.WriteFile("deb/jm2/index.html", []byte("<pre>URIs: https://repo.example/deb/jm2</pre>"))
 	rel.WriteFile("deb/jm2/SHA256SUMS", []byte("abc  x.deb\n"))
 	rel.WriteFile("rpm/jm2/repodata/repomd.xml", []byte("<repomd/>"))
@@ -281,6 +282,15 @@ func TestPages(t *testing.T) {
 	body, _ := io.ReadAll(r.Body)
 	if !bytes.Contains(body, []byte("URIs: https://nas.lan:8080/deb/jm2")) || r.Header.Get("Vary") != "X-Forwarded-Proto" {
 		t.Errorf("forwarded https: %s (Vary %q)", body, r.Header.Get("Vary"))
+	}
+	// Over HTTPS, the lines only plain HTTP needs are commented out.
+	if !bytes.Contains(body, []byte("\n<!--allowunsafeurl\n-->addrepo")) {
+		t.Errorf("forwarded https: http-only lines not commented out: %s", body)
+	}
+	r = do(t, h, "GET", "/index.html", map[string]string{"Host": "nas.lan:8080"})
+	body, _ = io.ReadAll(r.Body)
+	if !bytes.Contains(body, []byte("\n"+pages.HTTPOnlyStart+"allowunsafeurl\n"+pages.HTTPOnlyEnd+"addrepo")) {
+		t.Errorf("plain http: http-only lines changed: %s", body)
 	}
 	r = do(t, h, "GET", "/", map[string]string{"Host": "[fd00::5]:8080"})
 	body, _ = io.ReadAll(r.Body)
@@ -429,7 +439,9 @@ func TestNginxConfig(t *testing.T) {
 	}
 	// Listings are opt-out, pages and the URL filling are always there.
 	for _, want := range []string{"autoindex off;", "index index.html;", "sub_filter_once off;",
-		`sub_filter "` + pages.BaseURLPlaceholder + `" $crossdock_base_url;`, `"~` + hostRE.String() + `"`} {
+		`sub_filter "` + pages.BaseURLPlaceholder + `" $crossdock_base_url;`, `"~` + hostRE.String() + `"`,
+		`sub_filter "` + pages.HTTPOnlyStart + `" $crossdock_http_only_start;`, `https "<!--";`,
+		`sub_filter "` + pages.HTTPOnlyEnd + `" $crossdock_http_only_end;`, `https "-->";`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("nginx config missing %q", want)
 		}

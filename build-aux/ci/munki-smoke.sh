@@ -7,7 +7,9 @@
 #
 #   1. builds small copy_from_dmg disk images with hdiutil, writes their
 #      pkginfo sidecars, and publishes them with a hand-written manifest
-#   2. installs munkitools and points it at the repo
+#   2. installs munkitools with the landing page's if block, as a Mac
+#      without Munki would (and checks that a second run does nothing),
+#      and points it at the repo
 #   3. has managedsoftwareupdate install version 1.0, finishing a download
 #      that was cut off halfway (a 206 in serve's access log)
 #   4. upgrades to 1.1
@@ -16,13 +18,12 @@
 #   6. removes the item through managed_uninstalls
 #   7. checks a download by hand with the repo page's steps for macOS
 #
-#   MUNKITOOLS=munkitools.pkg CROSSDOCK=./crossdock build-aux/ci/munki-smoke.sh
+#   CROSSDOCK=./crossdock build-aux/ci/munki-smoke.sh
 #
 # Failures are printed as GitHub Actions error annotations.
 set -euo pipefail
 
 crossdock=${CROSSDOCK:-crossdock}
-munkitools=${MUNKITOOLS:?set MUNKITOOLS to a munkitools .pkg}
 work=$(mktemp -d)
 msu=/usr/local/munki/managedsoftwareupdate
 cache="/Library/Managed Installs/Cache"
@@ -119,8 +120,21 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 
-sudo installer -pkg "$munkitools" -target /
+# 2. munkitools, installed with the landing page's if block.
+curl -fsS "$base/" | python3 -c '
+import html, re, sys
+for pre in re.findall(r"<pre>(.*?)</pre>", sys.stdin.read(), re.S):
+    lines = html.unescape(pre).splitlines()
+    if lines and lines[0].startswith("if [ ! -x /usr/local/munki/"):
+        print("\n".join(lines[:lines.index("fi") + 1]))
+        sys.exit(0)
+sys.exit(1)' > "$work/install-munki.sh" || fail "landing page lacks the munkitools install block"
+[ ! -e "$msu" ] || fail "munkitools is already installed"
+zsh "$work/install-munki.sh"
+[ -x "$msu" ] || fail "the landing page's block didn't install munkitools"
 "$msu" --version
+again=$(zsh "$work/install-munki.sh" 2>&1)
+[ -z "$again" ] || fail "with Munki installed, the landing page's block still ran: $again"
 prefs=/Library/Preferences/ManagedInstalls
 sudo defaults write "$prefs" SoftwareRepoURL "$repo"
 sudo defaults write "$prefs" ClientIdentifier smoke-client
