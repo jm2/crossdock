@@ -179,10 +179,10 @@ jobs:
           go build -o /usr/local/bin/crossdock ./cmd/crossdock
           build-aux/ci/pacman-smoke.sh
 
-  # The real Munki client against a munki repo served by `crossdock serve`:
-  # it installs, upgrades and removes a copy_from_dmg item built with
-  # hdiutil, resumes a cut-off download, and refuses a disk image that
-  # doesn't match its catalog hash.
+  # The real Munki client against a munki repo served by `crossdock serve`,
+  # installed with the landing page's snippet: it installs, upgrades and
+  # removes a copy_from_dmg item built with hdiutil, resumes a cut-off
+  # download, and refuses a disk image that doesn't match its catalog hash.
   munki:
     name: Munki against crossdock (macOS)
     runs-on: macos-latest
@@ -196,23 +196,36 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Download munkitools
-        env:
-          URL: https://github.com/munki/munki/releases/download/v7.4.2/munkitools-7.4.2.5904.pkg
-          SHA256: 1e37e2fc1b7babe687ac4f5833c875e458876bea611d4baf073e3a288e4e1d22
-        run: |
-          curl -fsSLo "$RUNNER_TEMP/munkitools.pkg" "$URL"
-          echo "$SHA256  $RUNNER_TEMP/munkitools.pkg" | shasum -a 256 -c
-          pkgutil --check-signature "$RUNNER_TEMP/munkitools.pkg"
-
       - name: Publish, serve and use the repo with Munki
         run: |
           go build -o "$RUNNER_TEMP/crossdock" ./cmd/crossdock
-          CROSSDOCK="$RUNNER_TEMP/crossdock" MUNKITOOLS="$RUNNER_TEMP/munkitools.pkg" build-aux/ci/munki-smoke.sh
+          CROSSDOCK="$RUNNER_TEMP/crossdock" build-aux/ci/munki-smoke.sh
 
       - name: Munki's log
         if: failure()
         run: sudo cat "/Library/Managed Installs/Logs/ManagedSoftwareUpdate.log" || true
+
+  # The landing page's GooGet snippet on a Windows runner without GooGet: it
+  # installs GooGet from Google's repo, adds a goo repo served by
+  # `crossdock serve`, and installs a package from it.
+  googet:
+    name: GooGet snippet against crossdock (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Publish, serve and set up GooGet from the landing page
+        run: |
+          go build -o "$env:RUNNER_TEMP\crossdock.exe" ./cmd/crossdock
+          $env:CROSSDOCK = "$env:RUNNER_TEMP\crossdock.exe"
+          ./build-aux/ci/googet-smoke.ps1
 
   # Builds the .deb, installs it, and runs crossdock the packaged way under
   # the runner's real systemd: path-triggered publishing, the LAN server on

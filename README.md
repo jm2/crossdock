@@ -330,13 +330,20 @@ googet available
 ```
 
 The index pins each package's SHA-256, but GooGet has no index
-signatures. Serve it over HTTPS, or keep it on a trusted LAN.
+signatures. Serve it over HTTPS, or keep it on a trusted LAN. Where
+`googet` isn't installed, the landing page's snippet installs it first, in
+an elevated PowerShell. It downloads Google's googet package from Google's
+Compute Engine repository, pinned by SHA-256, and has the `googet.exe`
+inside install googet from there. GitHub's newest `googet.exe` is v2.20.0,
+from 2024.
 
 All clients get the public key from `https://repo.example/crossdock.asc`.
 For pacman, add it with `pacman-key --add` and `--lsign-key`.
 
 Munki (macOS, munkitools 7 from
-[Munki's releases](https://github.com/munki/munki/releases)):
+[Munki's releases](https://github.com/munki/munki/releases); where Munki
+isn't installed, the landing page's snippet installs munkitools 7.4.2
+first, pinned by SHA-256):
 
 ```sh
 sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL https://repo.example/munki/jm2

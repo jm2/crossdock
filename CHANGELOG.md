@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The landing page's GooGet and Munki snippets install their client where it's missing, and
+  skip it where it's there. For GooGet, it takes `googet.exe` from Google's googet package in
+  Google's Compute Engine repository (20261003.00, googet 3.4.0), pinned by SHA-256, and has it
+  install googet from that repo. For Munki, it installs munkitools 7.4.2 from Munki's releases,
+  pinned by SHA-256. CI runs both for real: the Munki job installs munkitools with the page's
+  block, and a new Windows job installs GooGet with the page's snippet, then a package from a
+  goo repo served by `crossdock serve`.
+
 ## [0.3.0] — 2026-11-25
 
 ### Added

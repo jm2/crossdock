@@ -364,6 +364,25 @@ func sumLine(sha256, name string) string {
 	return sha256 + "  " + name + "\n"
 }
 
+// The GooGet and Munki snippets install their client where it's missing,
+// from downloads pinned by SHA-256. Update these together with the Munki CI
+// job and build-aux/ci/googet-smoke.ps1, which run the snippets for real.
+const (
+	// GitHub's newest googet.exe is v2.20.0 (2024), so the snippet takes
+	// googet.exe out of Google's own googet package and has it install googet
+	// by name from Google's repo. Google's 20261003.00 build is googet 3.4.0
+	// (google/googet b40235e). That googet can't install a lone .goo on a
+	// machine with no repo (google/googet#218), hence -sources.
+	googetRepo      = "https://packages.cloud.google.com/yuck/repos/google-compute-engine-stable"
+	googetGooSHA256 = "e1674fc9ea06609451ccc5726e585a660e298c47ed5fd4283c27ef382c2fe356"
+	googetGooURL    = "https://packages.cloud.google.com/yuck/pool/google-compute-engine-stable/" + googetGooSHA256 + "-googet-x86_64-20261003.00.0@1.goo"
+
+	munkitoolsVersion = "7.4.2"
+	munkitoolsPkg     = "munkitools-7.4.2.5904.pkg"
+	munkitoolsURL     = "https://github.com/munki/munki/releases/download/v" + munkitoolsVersion + "/" + munkitoolsPkg
+	munkitoolsSHA256  = "1e37e2fc1b7babe687ac4f5833c875e458876bea611d4baf073e3a288e4e1d22"
+)
+
 // snippet returns the client's name, a shell snippet that sets up the repo,
 // and notes to show beside it.
 func snippet(r config.Repo, c Common) (string, string, []string) {
@@ -430,17 +449,40 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 		l("sudo dnf makecache")
 		return "dnf", b.String(), []string{"repo_gpgcheck=1 checks the signed repodata, which pins every package's SHA-256. Fedora 45 also requires a signature on each package (rpmsign); set gpgcheck=1 for signed packages."}
 	case config.FormatGoo:
+		// PowerShell, so the URLs are in its single quotes (none of them
+		// holds a quote).
+		l("if (-not (Get-Command googet -ErrorAction SilentlyContinue)) {")
+		l("  $goo = Join-Path $env:TEMP googet.goo")
+		l("  curl.exe -fsSLo $goo '", googetGooURL, "'")
+		l("  if ((Get-FileHash $goo).Hash -ne '", googetGooSHA256, "') { throw 'googet.goo: SHA-256 mismatch' }")
+		l("  tar.exe -xf $goo -C $env:TEMP googet.exe")
+		l(`  & "$env:TEMP\googet.exe" -root "$env:ProgramData\GooGet" -noconfirm install -sources '`, googetRepo, "' googet")
+		l(`  Remove-Item $goo, "$env:TEMP\googet.exe"`)
+		// googet's install sets these machine-wide; this session needs them
+		// too, as googet refuses to run without a root.
+		l(`  $env:GooGetRoot = "$env:ProgramData\GooGet"`)
+		l("  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')")
+		l("}")
 		l("googet addrepo ", r.Name, " ", repoURL)
 		l("googet available")
 		return "GooGet", b.String(), []string{
+			"Run it in an elevated PowerShell. Where googet isn't installed, the if block installs it from Google's Compute Engine repository: it checks Google's googet package against its SHA-256, then has the googet.exe inside install googet from there.",
 			"GooGet has no index signatures: serve it over HTTPS, or keep it on a trusted LAN. It skips http:// repos unless googet.conf sets allowunsafeurl: true.",
 		}
 	case config.FormatMunki:
+		l("if [ ! -x /usr/local/munki/managedsoftwareupdate ]; then")
+		l("  d=$(mktemp -d)")
+		l(`  (cd "$d" &&`)
+		l("    curl -fsSLO ", shellQuote(munkitoolsURL), " &&")
+		l("    echo '", munkitoolsSHA256, "  ", munkitoolsPkg, "' | shasum -a 256 -c &&")
+		l("    sudo installer -pkg ", munkitoolsPkg, " -target /)")
+		l(`  rm -rf "$d"`)
+		l("fi")
 		l("sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL ", shellQuote(repoURL))
 		l("sudo defaults write /Library/Preferences/ManagedInstalls ClientIdentifier ", r.Name)
 		l("sudo /usr/local/munki/managedsoftwareupdate --checkonly")
 		notes := []string{
-			"Install munkitools 7 (github.com/munki/munki/releases) first. Every item here is an optional install in Managed Software Center.",
+			"Where Munki isn't installed, the if block installs munkitools " + munkitoolsVersion + " from github.com/munki/munki, checked against its SHA-256. Every item here is an optional install in Managed Software Center.",
 		}
 		if r.SiteDefault {
 			notes = append(notes, "A Mac without a matching ClientIdentifier gets the same list, from manifests/site_default.")

@@ -106,6 +106,21 @@ func TestWriteSigned(t *testing.T) {
 			t.Errorf("root page lacks %q", want)
 		}
 	}
+	// The GooGet snippet installs googet first where it's missing, from
+	// Google's package pinned by SHA-256.
+	gooSetup := []string{
+		"if (-not (Get-Command googet -ErrorAction SilentlyContinue)) {\n",
+		"curl.exe -fsSLo $goo &#39;" + googetGooURL + "&#39;\n",
+		"if ((Get-FileHash $goo).Hash -ne &#39;" + googetGooSHA256 + "&#39;) { throw",
+		"-noconfirm install -sources &#39;" + googetRepo + "&#39; googet\n",
+		"$env:GooGetRoot = &#34;$env:ProgramData\\GooGet&#34;\n",
+		"}\ngooget addrepo win " + BaseURLPlaceholder + "/goo/win\n",
+	}
+	for _, want := range gooSetup {
+		if !strings.Contains(root, want) {
+			t.Errorf("root page's GooGet snippet lacks %q", want)
+		}
+	}
 	// Repos are in format, then name order.
 	if strings.Index(root, "arch/games") > strings.Index(root, "deb/games") || strings.Index(root, "goo/win") > strings.Index(root, "rpm/games") {
 		t.Error("repos out of order")
@@ -202,7 +217,12 @@ func TestMunkiPage(t *testing.T) {
 	page := read(t, e, "munki/mac/index.html")
 	for _, want := range []string{
 		"Munki · 2 packages · 3.0 GiB",
-		"sudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL &#39;" + BaseURLPlaceholder + "/munki/mac&#39;\n",
+		// munkitools first where it's missing, pinned by SHA-256.
+		"if [ ! -x /usr/local/munki/managedsoftwareupdate ]; then\n",
+		"curl -fsSLO &#39;" + munkitoolsURL + "&#39; &amp;&amp;\n",
+		"echo &#39;" + munkitoolsSHA256 + "  " + munkitoolsPkg + "&#39; | shasum -a 256 -c &amp;&amp;\n",
+		"sudo installer -pkg " + munkitoolsPkg + " -target /)\n",
+		"fi\nsudo defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL &#39;" + BaseURLPlaceholder + "/munki/mac&#39;\n",
 		"ClientIdentifier mac\n",
 		"from manifests/site_default",
 		"over HTTPS or a tailnet",
