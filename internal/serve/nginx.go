@@ -16,6 +16,12 @@ import (
 // baseURLVar is the nginx variable holding the address pages show.
 const baseURLVar = "$crossdock_base_url"
 
+// The nginx variables pages.HTTPOnlyStart and pages.HTTPOnlyEnd become.
+const (
+	httpOnlyStartVar = "$crossdock_http_only_start"
+	httpOnlyEndVar   = "$crossdock_http_only_end"
+)
+
 // NginxOptions controls the generated server block.
 type NginxOptions struct {
 	Output     string // crossdock output root
@@ -48,6 +54,16 @@ func WriteNginx(w io.Writer, o NginxOptions) error {
 	p("    \"~%s\" \"$scheme://$http_host\";\n", hostRE.String())
 	p("    default \"%s\";\n", pages.BaseURLPlaceholder)
 	p("}\n\n")
+	p("# Lines only a plain-HTTP address needs (GooGet's allowunsafeurl) sit\n")
+	p("# between these markers. For an HTTPS request they're commented out.\n")
+	p("map $scheme %s {\n", httpOnlyStartVar)
+	p("    https \"<!--\";\n")
+	p("    default \"%s\";\n", pages.HTTPOnlyStart)
+	p("}\n")
+	p("map $scheme %s {\n", httpOnlyEndVar)
+	p("    https \"-->\";\n")
+	p("    default \"%s\";\n", pages.HTTPOnlyEnd)
+	p("}\n\n")
 	p("server {\n")
 	p("    listen %s;\n", o.Listen)
 	p("    server_name %s;\n\n", o.ServerName)
@@ -67,6 +83,8 @@ func WriteNginx(w io.Writer, o NginxOptions) error {
 	p("    autoindex_localtime off;  # UTC, like crossdock serve\n")
 	p("    sub_filter_once off;\n")
 	p("    sub_filter \"%s\" %s;\n", pages.BaseURLPlaceholder, baseURLVar)
+	p("    sub_filter \"%s\" %s;\n", pages.HTTPOnlyStart, httpOnlyStartVar)
+	p("    sub_filter \"%s\" %s;\n", pages.HTTPOnlyEnd, httpOnlyEndVar)
 	p("    add_header X-Content-Type-Options nosniff always;\n\n")
 
 	p("    types {\n")

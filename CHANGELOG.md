@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pinned by SHA-256. CI runs both for real: the Munki job installs munkitools with the page's
   block, and a new Windows job installs GooGet with the page's snippet, then a package from a
   goo repo served by `crossdock serve`.
+- Over plain HTTP, the GooGet snippet also sets `allowunsafeurl: true` in `googet.conf`, which
+  GooGet needs for `http://` repos, unless it's already set. The page marks those lines, and
+  `crossdock serve` and the generated nginx config comment them out for HTTPS requests (pages
+  for a `public_url` include them or not by its scheme). The nginx config gains two `map`s and
+  `sub_filter` lines for this.
 
 ## [0.3.0] — 2026-11-25
 

@@ -330,7 +330,10 @@ googet available
 ```
 
 The index pins each package's SHA-256, but GooGet has no index
-signatures. Serve it over HTTPS, or keep it on a trusted LAN. Where
+signatures. Serve it over HTTPS, or keep it on a trusted LAN. GooGet
+skips `http://` repos unless `googet.conf` sets `allowunsafeurl: true`
+(for every repo on the machine), so when the page comes over plain HTTP,
+its snippet sets that too; over HTTPS it leaves those lines out. Where
 `googet` isn't installed, the landing page's snippet installs it first, in
 an elevated PowerShell. It downloads Google's googet package from Google's
 Compute Engine repository, pinned by SHA-256, and has the `googet.exe`

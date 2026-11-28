@@ -115,7 +115,10 @@ func TestWriteSigned(t *testing.T) {
 		"-noconfirm install -sources &#39;" + googetRepo + "&#39; googet\n",
 		"$env:GooGetRoot = &#34;$env:ProgramData\\GooGet&#34;\n",
 		// Prepended, so the session's own PATH entries stay.
-		"$env:Path = &#34;$env:GooGetRoot;$env:Path&#34;\n}\ngooget addrepo win " + BaseURLPlaceholder + "/goo/win\n",
+		"$env:Path = &#34;$env:GooGetRoot;$env:Path&#34;\n}\n" + HTTPOnlyStart + "$conf = ",
+		// allowunsafeurl, marked as only for plain HTTP.
+		"Set-Content $conf ((@(Get-Content $conf -ErrorAction SilentlyContinue) -notmatch &#39;^allowunsafeurl:&#39;) + &#39;allowunsafeurl: true&#39;)\n}\n" +
+			HTTPOnlyEnd + "googet addrepo win " + BaseURLPlaceholder + "/goo/win\n",
 	}
 	for _, want := range gooSetup {
 		if !strings.Contains(root, want) {
@@ -170,6 +173,36 @@ func TestWriteSigned(t *testing.T) {
 		sig := read(t, e, d+"/SHA256SUMS.asc")
 		if !strings.HasPrefix(sig, "-----BEGIN PGP SIGNATURE-----") {
 			t.Errorf("%s/SHA256SUMS.asc is not an armored detached signature: %q", d, sig)
+		}
+	}
+}
+
+// GooGet's allowunsafeurl lines are marked for the server to drop over
+// HTTPS when the address is the placeholder, and written or left out by
+// public_url's scheme otherwise.
+func TestGooHTTPOnly(t *testing.T) {
+	const line = "Set-Content $conf ("
+	for _, c := range []struct {
+		publicURL     string
+		lines, marked bool
+	}{
+		{"", true, true},
+		{"http://repo.lan:8080", true, false},
+		{"https://repo.example", false, false},
+	} {
+		e := env(t, nil)
+		if err := Write(cfg(c.publicURL, nil, gooRepo), e, ""); err != nil {
+			t.Fatal(err)
+		}
+		page := read(t, e, "goo/win/index.html")
+		if got := strings.Contains(page, line); got != c.lines {
+			t.Errorf("public_url %q: allowunsafeurl lines = %v, want %v", c.publicURL, got, c.lines)
+		}
+		if got := strings.Contains(page, HTTPOnlyStart) && strings.Contains(page, HTTPOnlyEnd); got != c.marked {
+			t.Errorf("public_url %q: markers = %v, want %v", c.publicURL, got, c.marked)
+		}
+		if !strings.Contains(page, "googet addrepo win ") {
+			t.Errorf("public_url %q: no addrepo line", c.publicURL)
 		}
 	}
 }

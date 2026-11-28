@@ -7,7 +7,8 @@
 #   1. builds a small .goo with tar.exe and publishes it
 #   2. runs the snippet in Windows PowerShell, as an administrator would
 #      paste it: googet is missing, so its if block installs GooGet from
-#      Google's repo, and the rest adds the crossdock repo
+#      Google's repo; the page comes over plain HTTP, so the snippet sets
+#      allowunsafeurl in googet.conf; and the rest adds the crossdock repo
 #   3. installs the package from the repo and checks its file
 #   4. runs the if block again, which must leave GooGet alone
 #
@@ -57,17 +58,16 @@ try {
     try { Invoke-WebRequest "$base/_crossdock/healthz" -UseBasicParsing | Out-Null; break } catch { Start-Sleep -Milliseconds 100 }
   }
 
-  # 2. The snippet, as the landing page shows it.
+  # 2. The snippet, as the landing page shows it: like a browser, drop
+  # HTML comments (the page's http-only markers) before decoding.
   $page = (Invoke-WebRequest "$base/" -UseBasicParsing).Content
   $snippet = [regex]::Matches($page, '(?s)<pre>(.*?)</pre>') |
-    ForEach-Object { [Net.WebUtility]::HtmlDecode($_.Groups[1].Value) } |
+    ForEach-Object { [Net.WebUtility]::HtmlDecode(($_.Groups[1].Value -replace '(?s)<!--.*?-->', '')) } |
     Where-Object { $_ -match '(?m)^googet addrepo smoke ' } | Select-Object -First 1
   if (-not $snippet) { Fail 'landing page lacks the GooGet snippet' }
   Set-Content "$work\snippet.ps1" $snippet
   $snippet.Substring(0, $snippet.IndexOf("`n}") + 2) | Set-Content "$work\install-googet.ps1"
-  # The repo is plain HTTP, which googet refuses unless googet.conf allows it.
-  New-Item -ItemType Directory -Force $root | Out-Null
-  Set-Content "$root\googet.conf" 'allowunsafeurl: true'
+  if (-not $snippet.Contains("'allowunsafeurl: true'")) { Fail 'the plain-HTTP page lacks the allowunsafeurl lines' }
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$work\snippet.ps1"
   if ($LASTEXITCODE) { Fail "the landing page's GooGet snippet failed" }
   # This session predates the install: take what it set machine-wide.
@@ -79,6 +79,8 @@ try {
   $installed
   if ($installed -notmatch 'googet\.x86_64') { Fail "googet doesn't list itself as installed" }
   "installed GooGet with the landing page's snippet"
+  if (-not (Select-String -Quiet '^allowunsafeurl:\s*true\s*$' "$root\googet.conf")) { Fail "the snippet didn't set allowunsafeurl in googet.conf" }
+  'the snippet set allowunsafeurl: true in googet.conf'
 
   # 3. A package from the crossdock repo.
   googet -noconfirm install crossdock-smoke

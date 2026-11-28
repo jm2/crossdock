@@ -39,6 +39,18 @@ const placeholderText = "http://<host>:8080"
 // names, versions and file names can't contain "<".
 const BaseURLPlaceholder = "http://&lt;host&gt;:8080"
 
+// HTTPOnlyStart and HTTPOnlyEnd bracket snippet lines that only a
+// plain-HTTP address needs (GooGet's allowunsafeurl). Pages that carry
+// BaseURLPlaceholder carry them too. They're HTML comments, so the lines
+// show as published, which suits the placeholder's http:// address. For an
+// HTTPS request, crossdock serve and the generated nginx config replace
+// them with "<!--" and "-->", which comments the lines out. Pages written
+// for a public_url get the lines or not, as its scheme needs.
+const (
+	HTTPOnlyStart = "<!--crossdock:http-only-->"
+	HTTPOnlyEnd   = "<!--/crossdock:http-only-->"
+)
+
 // Page and checksum file names, per repo and at the release root.
 const (
 	IndexName  = "index.html"
@@ -150,8 +162,8 @@ type repoPage struct {
 	Common
 	Dir      string // "<format>/<name>"
 	Name     string
-	Client   string // "apt", "pacman", "dnf", "GooGet", "Munki"
-	Snippet  string
+	Client   string        // "apt", "pacman", "dnf", "GooGet", "Munki"
+	Snippet  template.HTML // escaped, with HTTPOnlyStart and HTTPOnlyEnd as markup
 	Notes    []string
 	Count    int
 	Size     string
@@ -383,12 +395,31 @@ const (
 	munkitoolsSHA256  = "1e37e2fc1b7babe687ac4f5833c875e458876bea611d4baf073e3a288e4e1d22"
 )
 
-// snippet returns the client's name, a shell snippet that sets up the repo,
-// and notes to show beside it.
-func snippet(r config.Repo, c Common) (string, string, []string) {
+// snippet returns the client's name, a shell snippet that sets up the repo
+// (escaped for the page), and notes to show beside it.
+func snippet(r config.Repo, c Common) (string, template.HTML, []string) {
+	client, text, notes := snippetText(r, c)
+	return client, template.HTML(text), notes
+}
+
+// snippetText is snippet with the snippet's lines already HTML-escaped.
+func snippetText(r config.Repo, c Common) (string, string, []string) {
 	base, repoURL := c.Base, c.Base+"/"+string(r.Format)+"/"+r.Name
 	var b strings.Builder
-	l := func(s ...string) { b.WriteString(strings.Join(s, "") + "\n") }
+	l := func(s ...string) { b.WriteString(template.HTMLEscapeString(strings.Join(s, "")) + "\n") }
+	// httpOnly writes lines only a plain-HTTP address needs: between the
+	// markers when the address is the placeholder, as they are for an
+	// http:// public_url, and not at all for an https:// one.
+	httpOnly := func(lines func()) {
+		switch {
+		case base == placeholderText:
+			b.WriteString(HTTPOnlyStart)
+			lines()
+			b.WriteString(HTTPOnlyEnd)
+		case strings.HasPrefix(base, "http://"):
+			lines()
+		}
+	}
 	switch r.Format {
 	case config.FormatDeb:
 		// The keyring is named for its key, so sources from servers with
@@ -464,11 +495,19 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 		l(`  $env:GooGetRoot = "$env:ProgramData\GooGet"`)
 		l(`  $env:Path = "$env:GooGetRoot;$env:Path"`)
 		l("}")
+		// GooGet skips http:// repos unless googet.conf allows them. Set
+		// it, replacing any allowunsafeurl line, unless it's already set.
+		httpOnly(func() {
+			l(`$conf = "$env:GooGetRoot\googet.conf"`)
+			l(`if (-not (Select-String -Quiet '^allowunsafeurl:\s*true\s*$' $conf -ErrorAction SilentlyContinue)) {`)
+			l("  Set-Content $conf ((@(Get-Content $conf -ErrorAction SilentlyContinue) -notmatch '^allowunsafeurl:') + 'allowunsafeurl: true')")
+			l("}")
+		})
 		l("googet addrepo ", r.Name, " ", repoURL)
 		l("googet available")
 		return "GooGet", b.String(), []string{
 			"Run it in an elevated PowerShell. Where googet isn't installed, the if block installs it from Google's Compute Engine repository: it checks Google's googet package against its SHA-256, then has the googet.exe inside install googet from there.",
-			"GooGet has no index signatures: serve it over HTTPS, or keep it on a trusted LAN. It skips http:// repos unless googet.conf sets allowunsafeurl: true.",
+			"GooGet has no index signatures: serve it over HTTPS, or keep it on a trusted LAN. GooGet skips http:// repos unless googet.conf sets allowunsafeurl: true, which the snippet sets when this page comes over plain HTTP. It applies to every repo on that machine.",
 		}
 	case config.FormatMunki:
 		l("if [ ! -x /usr/local/munki/managedsoftwareupdate ]; then")
