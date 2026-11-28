@@ -114,7 +114,8 @@ func TestWriteSigned(t *testing.T) {
 		"if ((Get-FileHash $goo).Hash -ne &#39;" + googetGooSHA256 + "&#39;) { throw",
 		"-noconfirm install -sources &#39;" + googetRepo + "&#39; googet\n",
 		"$env:GooGetRoot = &#34;$env:ProgramData\\GooGet&#34;\n",
-		"}\ngooget addrepo win " + BaseURLPlaceholder + "/goo/win\n",
+		// Prepended, so the session's own PATH entries stay.
+		"$env:Path = &#34;$env:GooGetRoot;$env:Path&#34;\n}\ngooget addrepo win " + BaseURLPlaceholder + "/goo/win\n",
 	}
 	for _, want := range gooSetup {
 		if !strings.Contains(root, want) {

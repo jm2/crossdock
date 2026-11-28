@@ -459,9 +459,10 @@ func snippet(r config.Repo, c Common) (string, string, []string) {
 		l(`  & "$env:TEMP\googet.exe" -root "$env:ProgramData\GooGet" -noconfirm install -sources '`, googetRepo, "' googet")
 		l(`  Remove-Item $goo, "$env:TEMP\googet.exe"`)
 		// googet's install sets these machine-wide; this session needs them
-		// too, as googet refuses to run without a root.
+		// too, as googet refuses to run without a root. Prepending keeps the
+		// session's own PATH entries.
 		l(`  $env:GooGetRoot = "$env:ProgramData\GooGet"`)
-		l("  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')")
+		l(`  $env:Path = "$env:GooGetRoot;$env:Path"`)
 		l("}")
 		l("googet addrepo ", r.Name, " ", repoURL)
 		l("googet available")
