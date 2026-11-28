@@ -482,14 +482,18 @@ func snippetText(r config.Repo, c Common) (string, string, []string) {
 	case config.FormatGoo:
 		// PowerShell, so the URLs are in its single quotes (none of them
 		// holds a quote).
-		// The SHA-256 comes from .NET, not Get-FileHash: that's a script
-		// module function, which Windows client's default execution policy
-		// (Restricted) may refuse to load.
+		// It works in Constrained Language Mode (a WDAC or AppLocker
+		// lockdown), which refuses .NET methods on all but a few core
+		// types, so it calls none: certutil hashes the package and setx
+		// sets GooGetRoot. Not Get-FileHash either: that's a script module
+		// function, which Windows client's default execution policy
+		// (Restricted) may refuse to load. certutil prints the hash on
+		// its second line (spaced on Windows 8.1 and older).
 		l("if (-not (Get-Command googet -ErrorAction SilentlyContinue)) {")
 		l("  $goo = Join-Path $env:TEMP googet.goo")
 		l("  curl.exe -fsSLo $goo '", googetGooURL, "'")
 		l("  if ($LASTEXITCODE) { throw 'googet.goo: download failed' }")
-		l("  $sha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($goo))) -replace '-'")
+		l("  $sha = (certutil.exe -hashfile $goo SHA256)[1] -replace ' '")
 		l("  if ($sha -ne '", googetGooSHA256, "') { throw 'googet.goo: SHA-256 mismatch' }")
 		l("  tar.exe -xf $goo -C $env:TEMP googet.exe")
 		l(`  & "$env:TEMP\googet.exe" -root "$env:ProgramData\GooGet" -noconfirm install -sources '`, googetRepo, "' googet")
@@ -500,10 +504,11 @@ func snippetText(r config.Repo, c Common) (string, string, []string) {
 		// Prepending keeps the session's own PATH entries. The install
 		// writes the registry without telling Windows, so new windows
 		// wouldn't see either until the next sign-in: setting GooGetRoot
-		// again through .NET broadcasts the change (Path is left alone, as
-		// rewriting it that way would expand its %variables%).
+		// again with setx broadcasts the change, and Windows rereads both
+		// (Path is left alone, as setx would expand its %variables% and
+		// cut it at 1024 characters).
 		l(`  $env:GooGetRoot = "$env:ProgramData\GooGet"`)
-		l("  [Environment]::SetEnvironmentVariable('GooGetRoot', $env:GooGetRoot, 'Machine')")
+		l("  setx.exe GooGetRoot $env:GooGetRoot /M > $null")
 		l(`  $env:Path = "$env:GooGetRoot;$env:Path"`)
 		l("}")
 		// GooGet skips http:// repos unless googet.conf allows them. Set

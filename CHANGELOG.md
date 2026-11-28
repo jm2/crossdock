@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sub_filter` lines for this: **regenerate nginx configs made by 0.3.0 or earlier** with
   `crossdock nginx-config`, or HTTPS visitors see the lines. Other servers show them too, so
   set an `https://` `public_url` for those.
+- The GooGet snippet calls no .NET methods, so it works in PowerShell's Constrained Language
+  Mode (a WDAC or AppLocker lockdown): `certutil` checks the package's SHA-256 and `setx` sets
+  `GooGetRoot` machine-wide. The Windows CI job runs it in that mode, with googet's own install
+  script constrained too.
 
 ## [0.3.0] — 2026-11-25
 

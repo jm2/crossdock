@@ -5,11 +5,13 @@
 # GooGet under %ProgramData%, so not on your own machine). It:
 #
 #   1. builds a small .goo with tar.exe and publishes it
-#   2. runs the snippet in Windows PowerShell as pasted commands, under
-#      Windows client's default execution policy (Restricted): googet is
-#      missing, so its if block installs GooGet from Google's repo; the
-#      page comes over plain HTTP, so the snippet sets allowunsafeurl in
-#      googet.conf; and the rest adds the crossdock repo
+#   2. runs the snippet in Windows PowerShell as pasted commands on a
+#      locked-down machine: in Constrained Language Mode, with googet's own
+#      install script constrained too, as under a WDAC or AppLocker policy,
+#      and under Windows client's default execution policy (Restricted).
+#      googet is missing, so its if block installs GooGet from Google's
+#      repo; the page comes over plain HTTP, so the snippet sets
+#      allowunsafeurl in googet.conf; and the rest adds the crossdock repo
 #   3. installs the package from the repo and checks its file
 #   4. runs the if block again, which must leave GooGet alone
 #
@@ -22,12 +24,24 @@ Set-StrictMode -Version Latest
 $crossdock = if ($env:CROSSDOCK) { $env:CROSSDOCK } else { 'crossdock' }
 $work = Join-Path ([IO.Path]::GetTempPath()) "googet-smoke-$PID"
 $base = 'http://127.0.0.1:8088'
-# paste runs code the way pasting it into Windows PowerShell does: as
-# commands, not a script file, under Restricted, which refuses script files
-# and script modules. It returns powershell.exe's exit code.
+# paste runs code the way pasting it into Windows PowerShell does on a
+# locked-down machine: as commands, not a script file, in Constrained
+# Language Mode (which refuses .NET methods on all but a few core types),
+# under Restricted (which refuses script files and script modules). While
+# it runs, __PSLockdownPolicy, Windows PowerShell's switch for testing a
+# WDAC or AppLocker lockdown, is set machine-wide, so every PowerShell
+# started meanwhile, googet's install script included, runs constrained
+# too; only what's under System32 (PowerShell's own modules) stays in full
+# language. It returns powershell.exe's exit code.
 function paste([string]$code) {
-  powershell.exe -NoProfile -ExecutionPolicy Restricted -EncodedCommand ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))) | Out-Host
-  $LASTEXITCODE
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+  [Environment]::SetEnvironmentVariable('__PSLockdownPolicy', '4', 'Machine')
+  try {
+    powershell.exe -NoProfile -ExecutionPolicy Restricted -EncodedCommand $encoded | Out-Host
+    $LASTEXITCODE
+  } finally {
+    [Environment]::SetEnvironmentVariable('__PSLockdownPolicy', $null, 'Machine')
+  }
 }
 $root = Join-Path $env:ProgramData GooGet
 function Fail([string]$msg) {
@@ -65,6 +79,17 @@ try {
   foreach ($i in 1..50) {
     try { Invoke-WebRequest "$base/_crossdock/healthz" -UseBasicParsing | Out-Null; break } catch { Start-Sleep -Milliseconds 100 }
   }
+
+  # The lockdown must hold, or step 2 proves nothing: pasted commands, and
+  # a script file they start (as googet starts its install script), both
+  # run constrained.
+  $clm = 'if ($ExecutionContext.SessionState.LanguageMode -ne "ConstrainedLanguage") { exit 3 }'
+  if (paste $clm) { Fail 'pasted commands ran in full language, not Constrained Language Mode' }
+  Set-Content "$work\clm.ps1" $clm
+  if (paste "powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$work\clm.ps1'; exit `$LASTEXITCODE") {
+    Fail 'a script started from pasted commands ran in full language, not Constrained Language Mode'
+  }
+  'pasted commands, and the scripts they start, run in Constrained Language Mode'
 
   # 2. The snippet, as the landing page shows it: like a browser, drop
   # HTML comments (the page's http-only markers) before decoding.

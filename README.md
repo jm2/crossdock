@@ -272,8 +272,9 @@ Fedora 44 and 45, EL10.2 and newer, and Arch. CI runs each one's real
 client against a signed crossdock repo: apt on Debian stable (Sequoia's
 `sqv`) and Ubuntu 24.04 (`gpgv`), dnf5 on Fedora 44 and 45, dnf4 on
 AlmaLinux 10, pacman on Arch, and Munki 7 on macOS. It also runs the
-landing page's GooGet snippet on Windows (it installs GooGet, then a
-package from a crossdock repo) and its munkitools install on macOS.
+landing page's GooGet snippet on Windows, in Constrained Language Mode
+(it installs GooGet, then a package from a crossdock repo), and its
+munkitools install on macOS.
 
 Keys from `crossdock keygen` are v4 Ed25519. Every one of those clients
 accepts that format. The newer RFC 9580 v6 keys aren't used because
@@ -343,7 +344,10 @@ so set an `https://` `public_url` there. Where
 an elevated PowerShell. It downloads Google's googet package from Google's
 Compute Engine repository, pinned by SHA-256, and has the `googet.exe`
 inside install googet from there. GitHub's newest `googet.exe` is v2.20.0,
-from 2024.
+from 2024. The snippet calls no .NET methods (`certutil` checks the
+SHA-256, `setx` sets `GooGetRoot`), so it also runs in Constrained Language
+Mode, as on a machine locked down with WDAC or AppLocker, and under the
+Restricted execution policy.
 
 All clients get the public key from `https://repo.example/crossdock.asc`.
 For pacman, add it with `pacman-key --add` and `--lsign-key`.
